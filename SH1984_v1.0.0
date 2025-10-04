@@ -1,0 +1,85 @@
+# Audio Reconstruction Notes – Sherlock Holmes (1984)
+
+The final track seeks maximum fidelity to the English video master while preserving Spanish dialogue without perceptible loss.
+
+## Tools
+- MakeMKV v1.8.1 [darwin(arm64-release)]
+- ffmpeg version 8.0
+- MVSEP
+- Reaper v7.45/macOS-arm64
+- mkvmerge v94.0 ('Initiate') 64-bit
+
+## Sources
+- **Video**: 2012-12-04 Japanese Blu-ray remaster 1080p, 23.976 fps
+- **Audio VOX (Spanish)**: Llamentol DVD (AC3 2.0, 25 fps)
+- **Audio M&E (English)**: Blu-ray LPCM 2.0
+- **Audio M&E (Japanese)**: Blu-ray LPCM 2.0
+- **Subtitles**: N/A
+
+## Process
+1. **Extraction**
+- Spanish DVD extracted into MKV with MakeMKV
+- Spanish audio extracted to FLAC with ffmpeg:
+  ```bash
+  ffmpeg -i dvd.mkv -map 0:a:0 -c:a flac es_source.flac
+  ```
+
+2. **Frame Rate Conversion**
+- Spanish VOX converted from 25 fps to 23.976 fps to match Blu-ray timing:
+  ```bash
+  ffmpeg -i es_source.flac -ar 48000 -filter:a "atempo=0.95904" es_23976.flac
+  ```
+
+3. **Audio Separation**
+- Spanish VOX track extracted from `es_23976.flac` to FLAC lossless 24-bit using MVSEP:
+  - Model: "BS Roformer (vocals, instrumental), version 2025.07"
+  - Output: vocals track saved as `es_vox_24bit.flac` (FLAC (lossless, 24 bit))
+- English Music & Effects track extracted from Blu-ray PCM 2.0 to FLAC lossless 24-bit using MVSEP:
+  - Model: "BS Roformer (vocals, instrumental), version 2025.07"
+  - Output: instrumental track saved as `en_me_24bit.flac` (FLAC (lossless, 24 bit))
+
+4. **Audio Mixing**
+- Imported `es_vox_24bit.flac` and `en_me_24bit.flac` into Reaper:
+  - Synchronized tracks using visual waveform alignment
+  - Manual correction of silences or gaps using samples from the M&E track
+  - Applied EQ processing to Spanish VOX track using "VST: ReaEQ (Cockos)" to reduce microphone artifacts:
+    - Band 1: High-pass filter at 80 Hz, -∞ dB, 2.00 octaves
+    - Band 2: Band filter at 180 Hz, -3 dB, 1.00 octave
+    - Band 3: Band filter at 400 Hz, -2 dB, 1.20 octaves
+    - Band 4: Low-shelf filter at 5000 Hz, -3 dB, 2.00 octaves
+  - Master exported as 16-bit FLAC 48 KHz (compression level 8) as `es_reconstructed.flac`
+
+
+5. **Audio Compression**
+- Japanese and English PCM tracks compressed to FLAC for file size optimization:
+  ```bash
+  ffmpeg -i bluray.mkv -map 0:a:0 -c:a flac en.flac
+  ffmpeg -i bluray.mkv -map 0:a:1 -c:a flac ja.flac
+  ```
+
+6. **Final Export**
+- Multiplexed into MKV with mkvmerge, including all audio tracks:
+  - Spanish (Audio Reconstructed): `es_reconstructed.wav`
+  - English: `en.flac`
+  - Japanese: `ja.flac`
+  - English and Japanese subtitles
+  ```
+  mkvmerge -o Sherlock_Holmes_1984_S02E03.mkv \
+		--title "Sherlock Holmes (1984) S02E03: The Norwood Builder" \
+		--video-tracks 0 \
+		--no-audio \
+		--disable-track-statistics-tags \
+		--subtitle-tracks 3,5 \
+		--forced-display-flag 3:0 --forced-display-flag 5:0 \
+		--default-track-flag 3:0 --default-track-flag 5:0 \
+		bluray.mkv \
+		--language 0:spa --default-track-flag 0:1 --disable-track-statistics-tags --track-name 0:"Audio Reconstructed"\
+		es_reconstructed.flac \
+		--language 0:eng --default-track-flag 0:0 --disable-track-statistics-tags --original-flag 0:1  \
+		en.flac \
+		--language 0:jpn --default-track-flag 0:0 --disable-track-statistics-tags  \
+		ja.flac \
+		--track-order 0:0,1:0,2:0,3:0,0:5,0:3
+  ```
+
+
