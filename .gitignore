@@ -1,0 +1,39 @@
+# Python
+venv/
+pycache/
+*.pyc
+*.pyo
+*.pyd.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# Workspace (archivos de audio grandes)
+workspace/input/*
+workspace/extracted/*
+workspace/retimed/*
+workspace/stems/*
+workspace/mixed/*
+workspace/output/*
+
+# Mantener estructura de carpetas vacías
+!workspace/input/.gitkeep
+!workspace/extracted/.gitkeep
+!workspace/retimed/.gitkeep
+!workspace/stems/.gitkeep
+!workspace/mixed/.gitkeep
+!workspace/output/.gitkeep
+
+# macOS
+.DS_Store
+
+# IDEs
+.vscode/.idea/
+*.swp
+*.swo
+
+# Reaper
+*.reapeaks
+*.rpp-bak
