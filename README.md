@@ -19,8 +19,9 @@ Transform the original Sherlock Holmes episodes (available in English and Spanis
 Audio-remaster/
 ├── README.md                    # This file
 ├── steps/                       # Processing scripts (pipeline steps)
+│   ├── config.py               # Shared configuration (tools, tracks, etc) [NEW]
 │   ├── extract.py              # Step 1: Extract vocals and music from source files
-│   ├── reaper_project.py       # Step 2: Create Reaper project with stems
+│   ├── reaper_project.py       # Step 2: Create Reaper project with stems [RENAMED]
 │   ├── reaper_effects.py       # Step 3: Apply audio effects (EQ, volume, denoiser)
 │   ├── reaper_render.py        # Step 4: Render final ES MIX audio
 │   ├── mux_final.py            # Step 5: Create final MKV with all audio tracks
@@ -361,6 +362,18 @@ python3 steps/remux_4k.py \
 - **Default audio**: Spanish (ES MIX)
 - **Original flag**: English audio marked as original
 - **Track order**: Video → ES → EN → JA → Subtitles
+
+---
+
+## Configuration
+
+The project uses a central configuration file `steps/config.py` to manage:
+- **System tool paths** (ffmpeg, mkvmerge, mkvextract)
+- **Audio settings** (sample rate, codec)
+- **Reaper track names** (standardized across scripts)
+- **MVSEP API parameters**
+
+If your system uses different paths for `mkvtoolnix` (e.g., from homebrew vs system), update them in `steps/config.py`.
 
 ---
 

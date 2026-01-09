@@ -2,51 +2,56 @@ import subprocess
 import sys
 from pathlib import Path
 
+try:
+    from . import config
+except ImportError:
+    import config
+
 def extract_audio(input_mkv: Path, output_dir: Path, language: str, track_index: int = 0) -> Path:
     """
-    Extrae una pista de audio de un MKV a FLAC.
+    Extracts an audio track from an MKV file to FLAC.
     
     Args:
-        input_mkv: ruta al MKV fuente
-        output_dir: carpeta donde guardar el FLAC
-        language: 'es' o 'en' para nombrar archivo
-        track_index: índice de pista de audio (0:a:0, 0:a:1, etc.)
+        input_mkv: Path to the source MKV
+        output_dir: Directory where to save the FLAC
+        language: 'es' or 'en' for naming the file
+        track_index: Audio track index (0:a:0, 0:a:1, etc.)
     
     Returns:
-        Path al archivo FLAC generado
+        Path to the generated FLAC file
     """
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Nombre de salida basado en entrada y lenguaje
+    # Output name based on input and language
     stem = input_mkv.stem
-    output_flac = output_dir / f"{stem}_{language}_source.flac"
+    output_flac = output_dir / f"{stem}_{language}_source.{config.CODEC}"
     
     cmd = [
-        "ffmpeg",
+        config.FFMPEG_PATH,
         "-i", str(input_mkv),
         "-map", f"0:a:{track_index}",
-        "-c:a", "flac",
-        "-y",  # Sobreescribir si existe
+        "-c:a", config.CODEC,
+        "-y",  # Overwrite if exists
         str(output_flac)
     ]
     
-    print(f"[extract] Extrayendo audio {language} de {input_mkv.name}...")
-    print(f"[extract] Comando: {' '.join(cmd)}")
+    print(f"[extract] Extracting {language} audio from {input_mkv.name}...")
+    print(f"[extract] Command: {' '.join(cmd)}")
     
     result = subprocess.run(cmd, capture_output=True, text=True)
     
     if result.returncode != 0:
-        print(f"[ERROR] ffmpeg falló:\n{result.stderr}", file=sys.stderr)
+        print(f"[ERROR] {config.FFMPEG_PATH} failed:\n{result.stderr}", file=sys.stderr)
         sys.exit(1)
     
-    print(f"[extract] ✓ Audio extraído: {output_flac}")
+    print(f"[extract] ✓ Audio extracted: {output_flac}")
     return output_flac
 
 
 if __name__ == "__main__":
-    # Test rápido si ejecutas este script solo
+    # Quick test if script is run alone
     if len(sys.argv) < 3:
-        print("Uso: python extract.py <input.mkv> <output_dir> [language] [track_index]")
+        print("Usage: python extract.py <input.mkv> <output_dir> [language] [track_index]")
         sys.exit(1)
     
     input_path = Path(sys.argv[1])

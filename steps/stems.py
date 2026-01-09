@@ -4,31 +4,35 @@ import time
 import requests
 from pathlib import Path
 
+try:
+    from . import config
+except ImportError:
+    import config
+
 def separate_stems_mvsep_api(input_flac: Path, output_dir: Path, api_token: str = None, stem_type: str = "vocals") -> tuple[Path, Path]:
     """
-    Separa audio en VOX e instrumental usando MVSEP API.
+    Separates audio into VOX and instrumental using MVSEP API.
     """
     if not api_token:
-        print("[stems] ERROR: Necesitas un API token de MVSEP")
+        print("[stems] ERROR: MVSEP API token is required")
         sys.exit(1)
     
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    print(f"[stems] Subiendo {input_flac.name} a MVSEP...")
+    print(f"[stems] Uploading {input_flac.name} to MVSEP...")
     
     try:
         with open(input_flac, 'rb') as f:
             files = {'audiofile': f}
             data = {
                 'api_token': api_token,
-                'sep_type': '40',  # BS Roformer vocals/instrumental
-                'add_opt1': '81', # Vocal model type: ver 2025.07 (SDR vocals: 11.89, SDR instrum: 18.20)
-                'output_format': '2',  # FLAC 16-bit lossless
-                # 'output_format': '5',  # FLAC 24-bit lossless (Premium)
+                'sep_type': config.MVSEP_SEP_TYPE,
+                'add_opt1': config.MVSEP_ADD_OPT1,
+                'output_format': config.MVSEP_OUTPUT_FORMAT,
                 'is_demo': '0'
             }
             
-            response = requests.post('https://mvsep.com/api/separation/create', files=files, data=data)
+            response = requests.post(config.MVSEP_API_URL, files=files, data=data)
             result = response.json()
             
             if not result.get('success'):
@@ -37,21 +41,21 @@ def separate_stems_mvsep_api(input_flac: Path, output_dir: Path, api_token: str 
                 sys.exit(1)
             
             separation_hash = result['data']['hash']
-            print(f"[stems] ✓ Separación creada: {separation_hash}")
+            print(f"[stems] ✓ Separation created: {separation_hash}")
     
     except Exception as e:
         print(f"[stems] ERROR: {e}")
         sys.exit(1)
     
-    # Polling hasta que termine
-    print(f"[stems] Esperando a que termine el procesamiento...")
+    # Polling until finished
+    print(f"[stems] Waiting for processing to complete...")
     max_attempts = 120
     attempt = 0
     
     while attempt < max_attempts:
         try:
             check_response = requests.get(
-                'https://mvsep.com/api/separation/get',
+                config.MVSEP_CHECK_URL,
                 params={'hash': separation_hash, 'api_token': api_token}
             )
             check_result = check_response.json()
@@ -60,21 +64,21 @@ def separate_stems_mvsep_api(input_flac: Path, output_dir: Path, api_token: str 
                 print(f"[stems] ERROR: {check_result}")
                 sys.exit(1)
             
-            # El status está en el root, no en data
+            # Status is in the root, not in data
             status = check_result.get('status', 'unknown')
             
             if status == 'done':
-                print(f"[stems] ✓ Separación completada")
+                print(f"[stems] ✓ Separation completed")
                 
-                # Los files son un array de objetos con type y url
+                # Files are an array of objects with type and url
                 files_array = check_result['data'].get('files', [])
                 
                 if not files_array:
-                    print(f"[stems] ERROR: No se encontraron archivos")
-                    print(f"[stems] Respuesta: {check_result}")
+                    print(f"[stems] ERROR: No files found")
+                    print(f"[stems] Response: {check_result}")
                     sys.exit(1)
                 
-                # Buscar vocals y other/instrumental en el array
+                # Look for vocals and other/instrumental in the array
                 vocals_url = None
                 instrumental_url = None
                 
@@ -86,45 +90,44 @@ def separate_stems_mvsep_api(input_flac: Path, output_dir: Path, api_token: str 
                         instrumental_url = file_obj['url']
                 
                 if not vocals_url or not instrumental_url:
-                    print(f"[stems] ERROR: No se encontraron vocals o instrumental")
-                    print(f"[stems] Files disponibles: {files_array}")
+                    print(f"[stems] ERROR: Vocals or instrumental not found")
+                    print(f"[stems] Available files: {files_array}")
                     sys.exit(1)
                 
                 vocals_path = output_dir / f"{input_flac.stem}_vocals.flac"
                 instrumental_path = output_dir / f"{input_flac.stem}_instrumental.flac"
                 
-                print(f"[stems] Descargando vocals desde {vocals_url}...")
+                print(f"[stems] Downloading vocals from {vocals_url}...")
                 vocals_data = requests.get(vocals_url).content
                 vocals_path.write_bytes(vocals_data)
-                print(f"[stems] ✓ Guardado: {vocals_path}")
+                print(f"[stems] ✓ Saved: {vocals_path}")
                 
-                print(f"[stems] Descargando instrumental desde {instrumental_url}...")
+                print(f"[stems] Downloading instrumental from {instrumental_url}...")
                 inst_data = requests.get(instrumental_url).content
                 instrumental_path.write_bytes(inst_data)
-                print(f"[stems] ✓ Guardado: {instrumental_path}")
+                print(f"[stems] ✓ Saved: {instrumental_path}")
                 
                 return vocals_path, instrumental_path
                 
             elif status == 'failed' or status == 'error':
-                print(f"[stems] ERROR: Separación falló")
-                print(f"[stems] Detalles: {check_result}")
+                print(f"[stems] ERROR: Separation failed")
+                print(f"[stems] Details: {check_result}")
                 sys.exit(1)
             
-            print(f"[stems] Estado: {status}, esperando... ({attempt + 1}/{max_attempts})")
+            print(f"[stems] Status: {status}, waiting... ({attempt + 1}/{max_attempts})")
             time.sleep(5)
             attempt += 1
             
         except KeyboardInterrupt:
-            print(f"\n[stems] Cancelado por usuario")
+            print(f"\n[stems] Cancelled by user")
             sys.exit(1)
     
     print(f"[stems] ERROR: Timeout")
     sys.exit(1)
-
-
+    
 if __name__ == "__main__":
     if len(sys.argv) < 3:
-        print("Uso: python3 stems.py <input.flac> <output_dir> [api_token]")
+        print("Usage: python3 stems.py <input.flac> <output_dir> [api_token]")
         sys.exit(1)
     
     input_path = Path(sys.argv[1])

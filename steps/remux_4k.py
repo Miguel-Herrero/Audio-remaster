@@ -3,12 +3,16 @@ import subprocess
 from pathlib import Path
 import json
 
+try:
+    from . import config
+except ImportError:
+    import config
 
 def get_video_track_id(mkv_file: Path):
     """
-    Obtiene el ID de la pista de video del MKV.
+    Retrieves the video track ID from the MKV.
     """
-    cmd = ["/opt/homebrew/bin/mkvmerge", "-J", str(mkv_file)]
+    cmd = [config.MKVMERGE_PATH, "-J", str(mkv_file)]
     result = subprocess.run(cmd, capture_output=True, text=True)
     
     if result.returncode != 0:
@@ -25,32 +29,32 @@ def get_video_track_id(mkv_file: Path):
 
 def remux_4k(base_mkv: Path, video_4k_mkv: Path, output_file: Path, external_subs: Path = None):
     """
-    Crea un nuevo MKV combinando:
-    - Video del archivo 4K
-    - Todos los audios y subtítulos del MKV base
-    - Subtítulos externos opcionales
+    Creates a new MKV by combining:
+    - Video from 4K file
+    - All audio and subtitle tracks from base MKV
+    - Optional external subtitles
     """
     
-    print(f"[remux] === REMUX 4K ===")
-    print(f"[remux] MKV base (audios/subs): {base_mkv.name}")
-    print(f"[remux] MKV 4K (video): {video_4k_mkv.name}")
+    print(f"[remux] === 4K REMUX ===")
+    print(f"[remux] Base MKV (audio/subs): {base_mkv.name}")
+    print(f"[remux] 4K MKV (video): {video_4k_mkv.name}")
     if external_subs:
-        print(f"[remux] Subtítulos externos: {external_subs.name}")
-    print(f"[remux] Salida: {output_file.name}")
+        print(f"[remux] External subtitles: {external_subs.name}")
+    print(f"[remux] Output: {output_file.name}")
     print(f"[remux]")
     
-    # Analizar MKV base
-    print(f"[remux] Analizando MKV base...")
-    cmd = ["/opt/homebrew/bin/mkvmerge", "-J", str(base_mkv)]
+    # Analyze base MKV
+    print(f"[remux] Analyzing base MKV...")
+    cmd = [config.MKVMERGE_PATH, "-J", str(base_mkv)]
     result = subprocess.run(cmd, capture_output=True, text=True)
     
     if result.returncode != 0:
-        print(f"[remux] ERROR: No se pudo analizar el MKV base")
+        print(f"[remux] ERROR: Could not analyze base MKV")
         sys.exit(1)
     
     base_info = json.loads(result.stdout)
     
-    # Obtener pistas de audio del MKV base
+    # Get audio tracks from base MKV
     audio_tracks = []
     for track in base_info.get("tracks", []):
         if track["type"] == "audio":
@@ -59,30 +63,30 @@ def remux_4k(base_mkv: Path, video_4k_mkv: Path, output_file: Path, external_sub
             codec = track.get("codec", "unknown")
             print(f"[remux]   Audio {track['id']}: {lang} ({codec})")
     
-    # Obtener pistas de subtítulos del MKV base
+    # Get subtitle tracks from base MKV
     subtitle_tracks = []
     for track in base_info.get("tracks", []):
         if track["type"] == "subtitles":
             subtitle_tracks.append(track["id"])
             lang = track["properties"].get("language", "und")
-            print(f"[remux]   Subtítulo {track['id']}: {lang}")
+            print(f"[remux]   Subtitle {track['id']}: {lang}")
     
-    # Obtener título del MKV base
+    # Get title from base MKV
     title = base_info.get("container", {}).get("properties", {}).get("title", None)
     
-    # Analizar MKV 4K
+    # Analyze 4K MKV
     print(f"[remux]")
-    print(f"[remux] Analizando MKV 4K...")
-    cmd = ["/opt/homebrew/bin/mkvmerge", "-J", str(video_4k_mkv)]
+    print(f"[remux] Analyzing 4K MKV...")
+    cmd = [config.MKVMERGE_PATH, "-J", str(video_4k_mkv)]
     result = subprocess.run(cmd, capture_output=True, text=True)
     
     if result.returncode != 0:
-        print(f"[remux] ERROR: No se pudo analizar el MKV 4K")
+        print(f"[remux] ERROR: Could not analyze 4K MKV")
         sys.exit(1)
     
     video_4k_info = json.loads(result.stdout)
     
-    # Obtener pista de video 4K
+    # Get 4K video track
     video_track = None
     for track in video_4k_info.get("tracks", []):
         if track["type"] == "video":
@@ -94,25 +98,25 @@ def remux_4k(base_mkv: Path, video_4k_mkv: Path, output_file: Path, external_sub
             break
     
     if video_track is None:
-        print(f"[remux] ERROR: No se encontró pista de video en el MKV 4K")
+        print(f"[remux] ERROR: Video track not found in 4K MKV")
         sys.exit(1)
     
-    # Construir comando mkvmerge
+    # Build mkvmerge command
     print(f"[remux]")
-    print(f"[remux] Construyendo MKV final...")
+    print(f"[remux] Building final MKV...")
     
     cmd = [
-        "/opt/homebrew/bin/mkvmerge",
+        config.MKVMERGE_PATH,
         "-o", str(output_file)
     ]
     
-    # Título (copiar del base)
+    # Title (copy from base)
     if title:
-        # Modificar título para indicar que es 4K
+        # Modify title to indicate 4K
         title_4k = title.replace("(1984)", "(1984) [4K]") if "(1984)" in title else f"{title} [4K]"
         cmd.extend(["--title", title_4k])
     
-    # Video del MKV 4K (solo video, no audio ni subtítulos)
+    # Video from 4K MKV (video only, no audio or subtitles)
     cmd.extend([
         "--video-tracks", str(video_track),
         "--no-audio",
@@ -121,7 +125,7 @@ def remux_4k(base_mkv: Path, video_4k_mkv: Path, output_file: Path, external_sub
         str(video_4k_mkv)
     ])
     
-    # Audios y subtítulos del MKV base (sin video)
+    # Audio and subtitles from base MKV (no video)
     audio_ids = ",".join(str(t) for t in audio_tracks)
     
     cmd.extend([
@@ -136,21 +140,21 @@ def remux_4k(base_mkv: Path, video_4k_mkv: Path, output_file: Path, external_sub
     
     cmd.append(str(base_mkv))
     
-    # Track order: video primero, luego audios, luego subtítulos
-    track_order = ["0:0"]  # Video del archivo 4K
+    # Track order: video first, then audio, then subtitles
+    track_order = ["0:0"]  # Video from 4K file
     
-    # Audios del base (archivo 1)
+    # Audio from base (file 1)
     for audio_id in audio_tracks:
         track_order.append(f"1:{audio_id}")
     
-    # Subtítulos del base (archivo 1)
+    # Subtitles from base (file 1)
     for subtitle_id in subtitle_tracks:
         track_order.append(f"1:{subtitle_id}")
     
-    # Subtítulos externos (si se proporcionan)
+    # External subtitles (if provided)
     file_index = 2
     if external_subs:
-        print(f"[remux] Añadiendo subtítulos externos...")
+        print(f"[remux] Adding external subtitles...")
         cmd.extend([
             "--language", "0:eng",
             "--track-name", "0:English (4K)",
@@ -162,43 +166,43 @@ def remux_4k(base_mkv: Path, video_4k_mkv: Path, output_file: Path, external_sub
     
     cmd.extend(["--track-order", ",".join(track_order)])
     
-    # Ejecutar mkvmerge
-    print(f"[remux] Ejecutando mkvmerge...")
+    # Execute mkvmerge
+    print(f"[remux] Running mkvmerge...")
     print(f"[remux]")
     
     result = subprocess.run(cmd, capture_output=True, text=True)
     
     if result.returncode != 0:
-        print(f"[remux] ERROR: mkvmerge falló")
+        print(f"[remux] ERROR: mkvmerge failed")
         print(f"[remux] STDERR: {result.stderr}")
         print(f"[remux] STDOUT: {result.stdout}")
         sys.exit(1)
     
     print(f"[remux]")
-    print(f"[remux] OK: MKV 4K creado")
-    print(f"[remux] Archivo: {output_file}")
+    print(f"[remux] OK: 4K MKV created")
+    print(f"[remux] File: {output_file}")
     
-    # Mostrar info del archivo final
+    # Show final file info
     print(f"[remux]")
-    print(f"[remux] Información del archivo final:")
-    cmd_info = ["/opt/homebrew/bin/mkvmerge", "-i", str(output_file)]
+    print(f"[remux] Final file information:")
+    cmd_info = [config.MKVMERGE_PATH, "-i", str(output_file)]
     subprocess.run(cmd_info)
 
 
 if __name__ == "__main__":
     if len(sys.argv) < 4:
-        print(f"[remux] Sherlock Audio Pipeline - Remux 4K")
+        print(f"[remux] Sherlock Audio Pipeline - 4K Remux")
         print(f"[remux]")
-        print(f"[remux] Crea un nuevo MKV 4K combinando:")
-        print(f"[remux]   - Video del archivo 4K")
-        print(f"[remux]   - Todos los audios del MKV base (ES MIX, EN, JA)")
-        print(f"[remux]   - Todos los subtítulos del MKV base")
-        print(f"[remux]   - Subtítulos externos opcionales (SRT, ASS, etc.)")
+        print(f"[remux] Creates a new 4K MKV combining:")
+        print(f"[remux]   - Video from 4K file")
+        print(f"[remux]   - All audio from base MKV (ES MIX, EN, JA)")
+        print(f"[remux]   - All subtitles from base MKV")
+        print(f"[remux]   - Optional external subtitles (SRT, ASS, etc.)")
         print(f"[remux]")
-        print(f"[remux] Uso:")
-        print(f"[remux]   python3 steps/remux_4k.py <mkv_base> <mkv_4k_video> <output_4k.mkv> [subtitulos.srt]")
+        print(f"[remux] Usage:")
+        print(f"[remux]   python3 steps/remux_4k.py <base_mkv> <4k_video_mkv> <output_4k.mkv> [external_subs.srt]")
         print(f"[remux]")
-        print(f"[remux] Ejemplo:")
+        print(f"[remux] Example:")
         print(f"[remux]   python3 steps/remux_4k.py \\")
         print(f'[remux]     "workspace/output/Sherlock Holmes.s01e06.mkv" \\')
         print(f'[remux]     "/Users/.../00_sources/Sherlock Holmes.s01e06.4K.mkv" \\')
@@ -206,27 +210,27 @@ if __name__ == "__main__":
         print(f'[remux]     "/Users/.../00_sources/Sherlock Holmes.s01e06.4K.eng.srt"')
         sys.exit(1)
     
-    base_mkv = Path(sys.argv[1])
-    video_4k_mkv = Path(sys.argv[2])
-    output_file = Path(sys.argv[3])
-    external_subs = Path(sys.argv[4]) if len(sys.argv) > 4 else None
+    base_mkv_path = Path(sys.argv[1])
+    video_4k_mkv_path = Path(sys.argv[2])
+    output_file_path = Path(sys.argv[3])
+    external_subs_path = Path(sys.argv[4]) if len(sys.argv) > 4 else None
     
-    if not base_mkv.exists():
-        print(f"[remux] ERROR: No existe el archivo: {base_mkv}")
+    if not base_mkv_path.exists():
+        print(f"[remux] ERROR: File does not exist: {base_mkv_path}")
         sys.exit(1)
     
-    if not video_4k_mkv.exists():
-        print(f"[remux] ERROR: No existe el archivo: {video_4k_mkv}")
+    if not video_4k_mkv_path.exists():
+        print(f"[remux] ERROR: File does not exist: {video_4k_mkv_path}")
         sys.exit(1)
     
-    if external_subs and not external_subs.exists():
-        print(f"[remux] ERROR: No existe el archivo de subtítulos: {external_subs}")
+    if external_subs_path and not external_subs_path.exists():
+        print(f"[remux] ERROR: Subtitle file does not exist: {external_subs_path}")
         sys.exit(1)
     
-    # Crear directorio de salida si no existe
-    output_file.parent.mkdir(parents=True, exist_ok=True)
+    # Create output directory if it doesn't exist
+    output_file_path.parent.mkdir(parents=True, exist_ok=True)
     
-    print(f"[remux] Sherlock Audio Pipeline - Remux 4K")
+    print(f"[remux] Sherlock Audio Pipeline - 4K Remux")
     print(f"[remux]")
     
-    remux_4k(base_mkv, video_4k_mkv, output_file, external_subs)
+    remux_4k(base_mkv_path, video_4k_mkv_path, output_file_path, external_subs_path)
