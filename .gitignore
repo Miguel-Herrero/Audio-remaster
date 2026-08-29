@@ -1,0 +1,23 @@
+# Python / uv
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Editores
+.vscode/
+.cursor/
+.DS_Store
+
+# Cache de modelos de separacion (backend local)
+.cache/
+
+# Artefactos de REAPER
+*.reapeaks
+*.rpp-bak

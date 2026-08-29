@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>remaster</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: -apple-system, system-ui, sans-serif; max-width: 980px; margin: 2rem auto; padding: 0 1rem; }
+  h1 { font-size: 1.3rem; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 1.5rem; }
+  th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid #8883; }
+  .steps { font-size: 0.8rem; color: #888; }
+  select, button, input[type=text] { padding: 0.3rem 0.5rem; }
+  #log { background: #1113; border-radius: 6px; padding: 0.8rem; height: 320px; overflow-y: auto;
+         font-family: ui-monospace, monospace; font-size: 0.8rem; white-space: pre-wrap; display: none; }
+  .status-running { color: #b8860b; }
+  .status-done { color: #2e8b57; }
+  .status-error { color: #c0392b; }
+  .runbar { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.5rem; flex-wrap: wrap; }
+  fieldset { border: 1px solid #8883; border-radius: 6px; margin: 1rem 0; padding: 0.8rem 1rem; }
+  legend { font-size: 0.85rem; color: #888; padding: 0 0.3rem; }
+  details { border: 1px solid #8883; border-radius: 6px; margin: 1rem 0; padding: 0.8rem 1rem; }
+  details summary { font-size: 0.85rem; color: #888; cursor: pointer; user-select: none; }
+  details[open] summary { margin-bottom: 0.5rem; }
+  .cal-points { display: flex; flex-direction: column; gap: 0.3rem; margin-bottom: 0.5rem; }
+  .cal-point { display: flex; gap: 0.5rem; align-items: center; }
+  .cal-point input[type=number] { width: 9rem; padding: 0.25rem 0.4rem; }
+  .cal-point span { font-size: 0.8rem; color: #888; width: 1.2rem; }
+  .hint { font-size: 0.78rem; color: #888; margin: 0.3rem 0; }
+  #cal-result { font-size: 0.85rem; margin-top: 0.5rem; }
+  #cal-result table { margin: 0.4rem 0; }
+</style>
+</head>
+<body>
+<h1>remaster — episodios</h1>
+<p class="steps">Carpeta base: <code id="root"></code> (variable de entorno REMASTER_MOVIES_DIR)</p>
+<table id="episodes"><thead>
+  <tr><th>Episodio</th><th>Pasos hechos</th><th>Sync</th><th>MKV final</th><th></th></tr>
+</thead><tbody></tbody></table>
+
+<div id="runner" style="display:none">
+  <h2 id="runner-title"></h2>
+
+  <details id="cal-details">
+    <summary>Calibracion manual del sync (opcional)</summary>
+    <p class="hint">
+      Mide en REAPER el mismo instante en ES y en EN (segundos). Minimo 2 puntos
+      — con mas de 2 se ajusta por minimos cuadrados en vez de resolver exacto.
+      Si mediste contra un proyecto que ya tenia un offset constante aplicado
+      (sin deriva), indicalo en "offset ya aplicado"; si mediste contra las
+      fuentes sin corregir, dejalo en 0.
+    </p>
+    <div class="cal-points" id="cal-points"></div>
+    <div class="runbar">
+      <button id="cal-add-point" type="button">+ punto</button>
+      <label>offset ya aplicado (s) <input type="number" id="cal-against-offset" value="0" step="0.001" style="width:6rem"></label>
+    </div>
+    <div class="runbar">
+      <button id="cal-compute-btn">Calcular</button>
+      <button id="cal-apply-btn" disabled>Aplicar a este episodio</button>
+    </div>
+    <div id="cal-result"></div>
+  </details>
+
+  <div class="runbar">
+    <label>titulo del episodio
+      <input type="text" id="episode_title" placeholder='p.ej. "El problema final"' style="width:14rem">
+    </label>
+  </div>
+  <div class="runbar">
+    <label>desde <select id="from_step"></select></label>
+    <label>hasta <select id="to_step"></select></label>
+    <label>separador
+      <select id="separator"><option value="local">local</option><option value="mvsep">mvsep</option></select>
+    </label>
+    <label><input type="checkbox" id="force"> --force</label>
+    <button id="run-btn">Ejecutar</button>
+    <span id="status"></span>
+  </div>
+  <pre id="log"></pre>
+</div>
+
+<script>
+let currentEpisode = null;
+let pollTimer = null;
+
+async function loadEpisodes() {
+  const res = await fetch('/api/episodes');
+  const episodes = await res.json();
+  const tbody = document.querySelector('#episodes tbody');
+  tbody.innerHTML = '';
+  for (const ep of episodes) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><a href="#" data-path="${ep.path}">${ep.code}</a></td>
+      <td class="steps">${ep.steps_done.join(', ') || '—'}</td>
+      <td>${ep.has_align_png ? `<a href="/api/episodes/${ep.code}/align.png" target="_blank">ver</a>` : '—'}</td>
+      <td>${ep.has_final_mkv ? 'si' : '—'}</td>
+      <td><a href="#" data-path="${ep.path}" class="open">abrir</a></td>
+    `;
+    tbody.appendChild(tr);
+  }
+  document.querySelectorAll('a[data-path]').forEach(a => {
+    a.addEventListener('click', (e) => { e.preventDefault(); openRunner(a.dataset.path); });
+  });
+}
+
+let calSteps = [];
+
+async function openRunner(path) {
+  currentEpisode = path;
+  document.getElementById('runner').style.display = 'block';
+  document.getElementById('runner-title').textContent = path;
+  document.getElementById('log').style.display = 'none';
+  document.getElementById('log').textContent = '';
+  document.getElementById('status').textContent = '';
+  document.getElementById('cal-result').innerHTML = '';
+  document.getElementById('cal-apply-btn').disabled = true;
+  document.getElementById('episode_title').value = '';
+
+  calSteps = await (await fetch('/api/steps')).json();
+  for (const sel of [document.getElementById('from_step'), document.getElementById('to_step')]) {
+    sel.innerHTML = calSteps.map(s => `<option value="${s}">${s}</option>`).join('');
+  }
+  document.getElementById('to_step').value = 'mux';
+
+  resetCalibrationPoints();
+}
+
+function resetCalibrationPoints() {
+  const container = document.getElementById('cal-points');
+  container.innerHTML = '';
+  addCalibrationPoint();
+  addCalibrationPoint();
+}
+
+function addCalibrationPoint() {
+  const container = document.getElementById('cal-points');
+  const row = document.createElement('div');
+  row.className = 'cal-point';
+  row.innerHTML = `
+    <span>${container.children.length + 1}.</span>
+    ES <input type="number" class="cal-es" step="0.001" placeholder="segundos">
+    EN <input type="number" class="cal-en" step="0.001" placeholder="segundos">
+    <button type="button" class="cal-remove">quitar</button>
+  `;
+  row.querySelector('.cal-remove').addEventListener('click', () => {
+    if (container.children.length > 2) {
+      row.remove();
+      renumberCalibrationPoints();
+    }
+  });
+  container.appendChild(row);
+}
+
+function renumberCalibrationPoints() {
+  document.querySelectorAll('#cal-points .cal-point span').forEach((span, i) => {
+    span.textContent = `${i + 1}.`;
+  });
+}
+
+document.getElementById('cal-add-point').addEventListener('click', addCalibrationPoint);
+
+function readCalibrationPoints() {
+  const points = [];
+  document.querySelectorAll('#cal-points .cal-point').forEach(row => {
+    const es = row.querySelector('.cal-es').value;
+    const en = row.querySelector('.cal-en').value;
+    if (es !== '' && en !== '') points.push({ es: parseFloat(es), en: parseFloat(en) });
+  });
+  return points;
+}
+
+async function submitCalibration(apply) {
+  const points = readCalibrationPoints();
+  const resultDiv = document.getElementById('cal-result');
+  if (points.length < 2) {
+    resultDiv.innerHTML = '<span class="status-error">Hacen falta al menos 2 puntos con ambos valores rellenos.</span>';
+    return;
+  }
+  const body = {
+    episode: currentEpisode,
+    points,
+    against_offset: parseFloat(document.getElementById('cal-against-offset').value || '0'),
+    apply,
+  };
+  const res = await fetch('/api/calibrate', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    resultDiv.innerHTML = `<span class="status-error">${data.detail || 'error'}</span>`;
+    return;
+  }
+
+  const rows = points.map((p, i) => `<tr><td>${i + 1}</td><td>${p.es}</td><td>${p.en}</td><td>${data.residuals[i].toFixed(4)}</td></tr>`).join('');
+  resultDiv.innerHTML = `
+    <table><thead><tr><th>Punto</th><th>ES (s)</th><th>EN (s)</th><th>Residuo (s)</th></tr></thead>
+    <tbody>${rows}</tbody></table>
+    offset_seconds = ${data.offset_seconds.toFixed(4)} &nbsp; drift_slope = ${data.drift_slope.toFixed(7)}
+  `;
+  document.getElementById('cal-apply-btn').disabled = false;
+
+  if (apply) {
+    resultDiv.innerHTML += data.step_ran
+      ? '<p class="status-done">Aplicado a align.json.</p>'
+      : '<p class="hint">Sin cambios (ya estaba aplicado con estos valores).</p>';
+    resultDiv.innerHTML += '<p class="hint">Para conservarla: el rango de "Ejecutar" no debe incluir el paso align '
+      + '(lo repetiria con el sync automatico y la sobreescribiria). Ya se ha puesto "desde" en loudness.</p>';
+    if (calSteps.includes('loudness')) {
+      document.getElementById('from_step').value = 'loudness';
+    }
+    loadEpisodes();
+  }
+}
+
+document.getElementById('cal-compute-btn').addEventListener('click', () => submitCalibration(false));
+document.getElementById('cal-apply-btn').addEventListener('click', () => submitCalibration(true));
+
+document.getElementById('run-btn').addEventListener('click', async () => {
+  if (!currentEpisode) return;
+  const body = {
+    episode: currentEpisode,
+    from_step: document.getElementById('from_step').value,
+    to_step: document.getElementById('to_step').value,
+    separator: document.getElementById('separator').value,
+    force: document.getElementById('force').checked,
+    episode_title: document.getElementById('episode_title').value,
+  };
+  const res = await fetch('/api/run', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
+  });
+  const { job_id } = await res.json();
+  document.getElementById('log').style.display = 'block';
+  document.getElementById('log').textContent = '';
+  document.getElementById('status').textContent = 'ejecutando...';
+  document.getElementById('status').className = 'status-running';
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(() => pollJob(job_id), 1500);
+});
+
+async function pollJob(jobId) {
+  const res = await fetch(`/api/jobs/${jobId}`);
+  const data = await res.json();
+  const log = document.getElementById('log');
+  log.textContent = data.log;
+  log.scrollTop = log.scrollHeight;
+  const status = document.getElementById('status');
+  if (data.status === 'running') {
+    status.textContent = 'ejecutando...'; status.className = 'status-running';
+  } else {
+    status.textContent = data.status === 'done' ? 'terminado' : 'error';
+    status.className = data.status === 'done' ? 'status-done' : 'status-error';
+    clearInterval(pollTimer);
+    loadEpisodes();
+  }
+}
+
+loadEpisodes();
+setInterval(loadEpisodes, 10000);
+</script>
+</body>
+</html>

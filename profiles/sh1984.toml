@@ -1,0 +1,57 @@
+# Perfil de serie: Sherlock Holmes (1984).
+# Todo lo especifico de esta serie vive aqui, no en el codigo.
+
+name = "sh1984"
+
+[tracks]
+video = "VIDEO (Reference)"
+en_vox = "EN VOX"
+en_me = "EN M&E"
+es_vox = "ES VOX"
+es_me = "ES M&E"
+
+[languages]
+es = "spa"
+en = "eng"
+ja = "jpn"
+
+[mux]
+es_track_name = "Audio reconstruido"
+# {code} se sustituye por el nombre de la carpeta del episodio (p.ej. s03e01).
+# El titulo real (numero de temporada/episodio/nombre) se pasa por CLI —
+# esto es solo el valor por defecto si no se da --title/--episode-title.
+title_template = "Sherlock Holmes (1984) {code}"
+# Para el nombre del fichero final: "<series_title> <SxxExx> <episode_title>
+# - [<res>p <codec>] [FLAC <idiomas>] [Subs <idiomas>].mkv" — ver --episode-title.
+series_title = "Las aventuras de Sherlock Holmes (1984)"
+
+[loudness]
+# Delta maximo que se permite aplicar entre ES VOX y EN VOX, global o por
+# escena. Evita que un tramo con separacion ruidosa dispare una ganancia
+# absurda.
+max_delta_db = 6.0
+# Umbral (dBFS) por debajo del cual un segmento de EN M&E se considera
+# silencio a efectos de deteccion de cortes de escena.
+scene_min_silence_db = -35.0
+scene_min_duration_s = 1.5
+
+[reaeq]
+# Capturado de ~/Library/Application Support/REAPER/presets/vst-reaeq.ini,
+# embebido byte a byte en remaster/reaper/rpp.py (REAEQ_HOLMES_STATE_LINES).
+preset_name = "Holmes_1.0.1"
+
+[separation.local]
+# Por defecto del propio audio-separator (mismo default si se ejecuta sin
+# -m). Familia BS-Roformer, salida vocals/instrumental — el equivalente
+# publico mas cercano al modelo "BS Roformer ver 2025.07" que usa MVSEP.
+# Verificado con `audio-separator --list_models`: SDR vocals 12.9755.
+model_filename = "model_bs_roformer_ep_317_sdr_12.9755.ckpt"
+sample_rate = 48000
+
+[separation.mvsep]
+# Verificado contra https://mvsep.com/en/full_api el 2026-08-29.
+sep_type = "40"     # BS Roformer (vocals, instrumental)
+add_opt1 = "81"     # ver. 2025.07
+add_opt2 = "2"      # overlap 50% (default)
+output_format = "5" # flac (lossless, 24 bit) — el config.py viejo usaba
+                     # "2" (flac 16-bit) por error; ver plan v2, hallazgo 4.
