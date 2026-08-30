@@ -93,10 +93,11 @@ def test_english_patches_become_one_action_with_one_line_per_spot():
         global_check=_healthy_global(),
         items=(_item(STATUS_DOUBLE_GAIN, 6.0, start=317.0), _item(STATUS_DOUBLE_GAIN, 2.8, start=294.0)),
     )
-    action = next(a for a in build_actions(report) if "audio en ingles" in a.title)
+    action = next(a for a in build_actions(report) if "audio en inglés" in a.title)
     assert action.urgency == "alta"
     assert len(action.spots) == 2
-    assert "bajalo 6.0 dB" in action.spots[0]  # ordenado por gravedad
+    # ordenado por gravedad, y la linea dice la ACCION, no la observacion
+    assert action.spots[0] == "5:17.000 → 5:20.000 (3.0s): ES baja 6.0 dB (suena más alto que EN)"
     assert "envolvente de volumen" in action.how
 
 
@@ -105,7 +106,8 @@ def test_deviating_items_are_framed_as_listen_first_not_fix_blindly():
     action = next(a for a in build_actions(report) if "Escucha" in a.title)
     assert action.urgency == "media"
     assert "no corregirlos a ciegas" in action.why
-    assert "mas BAJO" in action.spots[0]
+    # delta negativo -> hay que SUBIR el castellano
+    assert action.spots[0] == "0:10.000 → 0:13.000 (3.0s): ES sube 13.5 dB (suena más bajo que EN)"
 
 
 def test_low_headroom_gives_the_exact_number_to_dial_in():
@@ -116,11 +118,39 @@ def test_low_headroom_gives_the_exact_number_to_dial_in():
     )
     report = _report(global_check=tight, global_gain_db=-0.81)
     action = next(a for a in build_actions(report) if "sature" in a.title)
-    assert action.urgency == "alta"
+    # sin recortes esto es precaucion, no averia: no puede gritar como si
+    # el audio ya estuviera roto, o se ignora el aviso cuando si lo este
+    assert action.urgency == "media"
+    assert "NO distorsiona" in action.why
+    assert "es precaución, no avería" in action.why
     # -0.81 menos lo que falta para el margen comodo (3.0 - 0.8 = 2.2)
     expected = -0.81 - (COMFORTABLE_HEADROOM_DB - 0.8)
     assert f"{expected:+.2f} dB" in action.how
     assert "JS: utility/volume" in action.how
+    # y avisa de que mide la pista de voz sola, no la mezcla final
+    assert "mezcla final" in action.how
+
+
+def test_actual_clipping_is_urgent_and_says_so():
+    clipping = GlobalCheck(
+        es_lufs_i=-23.9, en_lufs_i=-23.4, delta_db=-0.5,
+        es_peak_dbfs=0.0, en_peak_dbfs=-4.8, es_clips=44,
+        es_lra=11.4, en_lra=15.6, headroom_db=0.0,
+    )
+    action = next(a for a in build_actions(_report(global_check=clipping)) if "sature" in a.title)
+    assert action.urgency == "alta"
+    assert "44 muestras recortadas" in action.why
+    assert "distorsión audible" in action.why
+
+
+def test_tight_but_not_dangerous_headroom_is_only_informative():
+    ok_ish = GlobalCheck(
+        es_lufs_i=-23.9, en_lufs_i=-23.4, delta_db=-0.5,
+        es_peak_dbfs=-2.0, en_peak_dbfs=-4.8, es_clips=0,
+        es_lra=11.4, en_lra=15.6, headroom_db=2.0,
+    )
+    action = next(a for a in build_actions(_report(global_check=ok_ish)) if "sature" in a.title)
+    assert action.urgency == "info"
 
 
 def test_comfortable_headroom_raises_nothing():
@@ -136,7 +166,7 @@ def test_envelope_verdict_is_reported_as_information_not_a_chore():
     )
     action = next(a for a in build_actions(report) if "envolvente" in a.title.lower())
     assert action.urgency == "info"
-    assert "dejala como esta" in action.title
+    assert "déjala como está" in action.title
     assert action.how == "No tienes que hacer nada."
 
 
@@ -158,13 +188,13 @@ def test_long_stretches_are_separate_from_single_moments():
     )
     action = next(a for a in build_actions(report) if "tramos largos" in a.title)
     assert "dos minutos seguidos" in action.why
-    assert "6:00" in action.spots[0]
+    assert action.spots[0] == "6:00.000 → 8:00.000 (120.0s): ES baja 3.2 dB (suena más alto que EN)"
 
 
 def test_report_leads_with_actions_and_hides_the_technical_detail():
     report = _report(global_check=_healthy_global(), items=(_item(STATUS_DOUBLE_GAIN, 6.0),))
     html = render_html(report)
-    assert html.index("Que tengo que hacer") < html.index("Detalle tecnico")
+    assert html.index("Qué tengo que hacer") < html.index("Detalle técnico")
     assert "<details>" in html  # el detalle va plegado
     assert "Impuesto" not in html  # jerga traducida del ingles, fuera
 

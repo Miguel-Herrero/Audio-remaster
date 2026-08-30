@@ -627,7 +627,7 @@ def verify(
         raise typer.Exit(1) from exc
 
     actions = build_actions(report)
-    console.print(f"\n[bold]Que tengo que hacer — {layout.code}[/bold]")
+    console.print(f"\n[bold]Qué tengo que hacer — {layout.code}[/bold]")
     if not actions:
         console.print("[green]Nada. El castellano cuadra con el ingles en todo el episodio.[/green]")
     for n, action in enumerate(actions, start=1):
@@ -636,7 +636,7 @@ def verify(
         # lineas van llenas de timecodes y dB — queda ilegible.
         console.print(f"\n[{colour}][bold]{n}. {action.title}[/bold][/{colour}]", highlight=False)
         console.print(f"   {action.why}", highlight=False)
-        console.print(f"   [bold]Que hacer:[/bold] {action.how}", highlight=False)
+        console.print(f"   [bold]Qué hacer:[/bold] {action.how}", highlight=False)
         for spot in action.spots[:12]:
             console.print(f"     · {spot}", highlight=False)
         if len(action.spots) > 12:
