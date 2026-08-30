@@ -196,8 +196,12 @@ table.mini th { color: var(--fg-faint); font-weight: 500; }
 
 /* ---------- barra de ejecucion ---------- */
 .runbar {
-  position: sticky; bottom: 0; margin-top: .5rem; padding: .75rem 0 .9rem;
-  background: linear-gradient(to top, var(--bg) 72%, transparent);
+  /* Los puntos del timeline llevan z-index para taparle la linea al
+     conector. Sin un z-index mayor aqui, se cuelan por encima del boton
+     al hacer scroll — y el degradado transparente no los oculta. */
+  position: sticky; bottom: 0; z-index: 10; margin-top: .5rem;
+  padding: 1.4rem 0 .9rem;
+  background: linear-gradient(to top, var(--bg) 0, var(--bg) 68%, transparent);
   display: flex; gap: .7rem; align-items: center; flex-wrap: wrap;
 }
 .runbar .what { font-size: .85rem; color: var(--fg-dim); }
@@ -484,10 +488,20 @@ function openFromHash() {
 window.addEventListener('hashchange', openFromHash);
 
 // ---------------------------------------------------------------- timeline
+// El `outcome` que manda la traza y el estado que pinta la UI no son lo
+// mismo: la traza dice si el paso hizo trabajo ("ran") y la UI dibuja si
+// esta hecho ("done"). Sin esta tabla, un paso recien ejecutado llegaba
+// como "ran", que no esta ni en GLYPH ni en el CSS, y se quedaba con el
+// circulo de pendiente y la linea punteada.
+const OUTCOME_STATE = { ran: 'done', noop: 'noop', skipped: 'skipped', error: 'error' };
+
 function stepState(i) {
   const key = STEPS[i].key;
   const live = liveStates[key];
-  if (live) return live.state === 'running' ? 'running' : (live.outcome || 'done');
+  if (live) {
+    if (live.state === 'running') return 'running';
+    return OUTCOME_STATE[live.outcome] || 'done';
+  }
   if (current && current.steps[key]) return 'done';
   return 'pending';
 }
