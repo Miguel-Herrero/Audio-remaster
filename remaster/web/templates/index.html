@@ -65,17 +65,20 @@
   <fieldset id="verify-box">
     <legend>Re-analizar tras sincronizar a mano</legend>
     <p class="hint">
-      Compara el proyecto tal como lo has dejado (el .RPP, con sus cortes y sus
-      rellenos de otras pistas) contra EN VOX, y saca los tramos concretos que revisar.
-      Para el analisis completo hace falta la medida post-FX, que solo la da REAPER:
-      abre el proyecto, <b>Render</b>, marca <b>«Dry run (no output file)»</b> y
-      <b>«Loudness/peak analysis»</b>, renderiza, y vuelve aqui. Sin eso se analiza
-      solo el .RPP y faltan el LUFS-I global, el pico real y el veredicto de la envolvente.
+      Compara el proyecto tal como lo has dejado (con sus cortes y sus rellenos de otras
+      pistas) contra el ingles, y te dice que tramos revisar y que hacer con cada uno.
+      <br><br>
+      <b>Antes de pulsar, mide en REAPER:</b> abre el proyecto, selecciona las pistas a
+      analizar (<b>ES VOX</b> y <b>EN VOX</b>) y ejecuta la accion
+      <b>«Calculate loudness of selected tracks via dry run render»</b>. Luego vuelve aqui.
+      <br>
+      Sin esa medida el analisis sale a medias: falta el volumen global, el margen real
+      antes de saturar y el veredicto sobre la envolvente.
     </p>
     <p class="hint" id="verify-stats-state">—</p>
     <div class="runbar">
       <button id="verify-btn">Re-analizar</button>
-      <label><input type="checkbox" id="verify-no-stats"> solo el .RPP</label>
+      <label><input type="checkbox" id="verify-no-stats"> sin medir (analisis parcial)</label>
       <a id="verify-report-link" href="#" target="_blank" style="display:none">ver ultimo informe</a>
     </div>
   </fieldset>
@@ -257,12 +260,12 @@ async function refreshVerifyBox() {
 
   const info = await (await fetch(`/api/episodes/${code}/render-stats`)).json();
   if (!info.found) {
-    state.innerHTML = '<span class="status-error">No encuentro ningun render_stats.html.</span> '
-      + 'Haz el dry run en REAPER, o marca «solo el .RPP» para un analisis parcial.';
+    state.innerHTML = '<span class="status-error">Todavia no has medido en REAPER.</span> '
+      + 'Ejecuta alli la accion de arriba, o marca «sin medir» para un analisis parcial.';
   } else {
     const stale = info.age_minutes > 120;
-    state.innerHTML = `render_stats.html de ${info.modified} (hace ${info.age_minutes} min)`
-      + (stale ? ' — <span class="status-error">es viejo: si has tocado el proyecto despues, rehaz el dry run.</span>' : '')
+    state.innerHTML = `Ultima medida de REAPER: ${info.modified} (hace ${info.age_minutes} min)`
+      + (stale ? ' — <span class="status-error">si has tocado el proyecto despues, vuelve a medir.</span>' : '')
       + `<br><code>${info.path}</code>`;
   }
 }

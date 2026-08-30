@@ -31,7 +31,7 @@ from .steps.project import build_project_step
 from .steps.remux4k import remux4k_step
 from .steps.render import REAPER_BINARY, render_step
 from .steps.retime import retime_step
-from .steps.verify import STATUS_DOUBLE_GAIN, VerifyError, format_timecode, verify_project, write_report
+from .steps.verify import STATUS_DOUBLE_GAIN, VerifyError, build_actions, format_timecode, verify_project, write_report
 from .steps.separate import LocalSeparatorBackend, MvsepSeparatorBackend, SeparatorBackend, separate_all
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
@@ -589,18 +589,21 @@ def verify(
     episode: Path = typer.Argument(..., help="Carpeta del episodio"),
     stats: Optional[Path] = typer.Option(
         None, "--stats",
-        help="render_stats.html de un dry run de REAPER. Sin esto se busca el mas reciente en el temporal del sistema.",
+        help="Fichero de medida de REAPER. Sin esto se busca el mas reciente en el temporal del sistema.",
     ),
-    no_stats: bool = typer.Option(False, "--no-stats", help="Analizar solo el .RPP, sin medida post-FX"),
+    no_stats: bool = typer.Option(False, "--no-stats", help="Analizar sin la medida de REAPER (analisis parcial)"),
     profile_path: Optional[Path] = typer.Option(None, "--profile", help="Perfil de serie (por defecto profiles/sh1984.toml)"),
     open_report: bool = typer.Option(False, "--open", help="Abrir el informe HTML al terminar"),
 ) -> None:
     """Re-analiza el proyecto tal como lo has dejado tras sincronizar a mano.
 
     Lee el .RPP editado (no `loudness.json`) y compara el nivel resultante
-    de cada item contra EN VOX, para señalar tramos concretos que revisar.
-    Con el `render_stats.html` de un dry run añade la medida post-FX:
-    LUFS-I global, pico real y veredicto sobre la envolvente.
+    de cada item contra EN VOX, para señalar tramos concretos que revisar y
+    que hacer con cada uno.
+
+    Para el analisis completo, antes en REAPER: selecciona las pistas a
+    analizar y ejecuta la accion "Calculate loudness of selected tracks via
+    dry run render".
     """
     layout = EpisodeLayout(root=episode.expanduser().resolve())
     profile = load_profile(profile_path)
@@ -610,9 +613,9 @@ def verify(
         stats_path = stats.expanduser().resolve() if stats else newest_render_stats(stats_search_dirs(layout))
         if stats_path is None:
             console.print(
-                "[yellow]Sin render_stats.html.[/yellow] Para el analisis completo, en REAPER: "
-                "Render, marca 'Dry run (no output file)' y 'Loudness/peak analysis', y renderiza. "
-                "Sigo solo con el .RPP."
+                "[yellow]No encuentro ninguna medida de REAPER.[/yellow] Para el analisis completo, "
+                "en REAPER: selecciona las pistas a analizar y ejecuta la accion "
+                "'Calculate loudness of selected tracks via dry run render'. Sigo sin ella."
             )
         elif not stats_path.exists():
             raise typer.BadParameter(f"no existe {stats_path}")
@@ -623,10 +626,26 @@ def verify(
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from exc
 
+    actions = build_actions(report)
+    console.print(f"\n[bold]Que tengo que hacer — {layout.code}[/bold]")
+    if not actions:
+        console.print("[green]Nada. El castellano cuadra con el ingles en todo el episodio.[/green]")
+    for n, action in enumerate(actions, start=1):
+        colour = {"alta": "red", "media": "yellow"}.get(action.urgency, "cyan")
+        # highlight=False: rich colorea cada numero por su cuenta y estas
+        # lineas van llenas de timecodes y dB — queda ilegible.
+        console.print(f"\n[{colour}][bold]{n}. {action.title}[/bold][/{colour}]", highlight=False)
+        console.print(f"   {action.why}", highlight=False)
+        console.print(f"   [bold]Que hacer:[/bold] {action.how}", highlight=False)
+        for spot in action.spots[:12]:
+            console.print(f"     · {spot}", highlight=False)
+        if len(action.spots) > 12:
+            console.print(f"     · … y {len(action.spots) - 12} mas (ver el informe)", highlight=False)
+
     console.print(
-        f"[bold]{layout.code}[/bold] — {report.item_count} items en «{report.es_track}», "
+        f"\n[dim]Detalle — {report.item_count} items en «{report.es_track}», "
         f"fuentes: {', '.join(report.sources) or '—'}, "
-        f"ganancia global {report.global_gain_db:+.2f} dB"
+        f"ganancia global {report.global_gain_db:+.2f} dB[/dim]"
     )
 
     if report.global_check:

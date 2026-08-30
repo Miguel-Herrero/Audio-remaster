@@ -16,9 +16,16 @@ versionado con [SemVer](https://semver.org/lang/es/).
   medida post-FX: LUFS-I global, pico real, deriva por ventanas de 2 min,
   puntos sueltos más desviados, y un A/B que dice si la envolvente sigue
   ayudando tras re-sincronizar.
-- Informe en `.remaster/verify.json` y `.remaster/verify.html`.
-- Botón «Re-analizar tras sincronizar a mano» en la UI web, con el estado
-  del `render_stats.html` detectado y las instrucciones del dry run.
+- Informe en `.remaster/verify.json` y `.remaster/verify.html`. Empieza por
+  «Qué tengo que hacer»: cada hallazgo traducido a una instrucción concreta
+  en lenguaje llano (qué pasa, por qué importa y los pasos exactos en
+  REAPER, con los tramos y los dB de cada uno). El detalle técnico queda
+  debajo, plegado. Detecta además si el proyecto se guardó después de la
+  última medida y, en ese caso, lo primero que pide es volver a medir.
+- Botón «Re-analizar tras sincronizar a mano» en la UI web, con el estado de
+  la última medida detectada y las instrucciones para obtenerla (en REAPER:
+  seleccionar las pistas y ejecutar la acción «Calculate loudness of selected
+  tracks via dry run render»).
 - Lector de `.RPP` (`remaster/reaper/rpp_read.py`) y de `render_stats.html`
   de REAPER (`remaster/reaper/render_stats.py`).
 - Claves de perfil `[loudness] peak_ceiling_dbfs`, `verify_tolerance_db` y

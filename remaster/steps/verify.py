@@ -160,6 +160,22 @@ class EnvelopeCheck:
 
 
 @dataclass(frozen=True)
+class Action:
+    """Una cosa concreta que hacer, en cristiano.
+
+    El informe tenia todos los datos pero no decia que hacer con ellos.
+    Cada hallazgo tecnico se traduce aqui a: que pasa, por que importa, y
+    los pasos exactos en REAPER. Lo tecnico sigue abajo para quien quiera
+    comprobarlo.
+    """
+    urgency: str  # "alta" | "media" | "info"
+    title: str
+    why: str
+    how: str
+    spots: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class FxTax:
     """Cuanto sube el pico la cadena de FX (ReaEQ/ReaFir) respecto al pico
     de la señal cruda ya con las ganancias aplicadas. Es el numero que
@@ -193,6 +209,9 @@ class VerifyReport:
     envelope: EnvelopeCheck | None = None
     fx_tax: FxTax | None = None
     en_reference_floor_lufs: float = FALLBACK_EN_LUFS_I - EN_REFERENCE_MARGIN_DB
+    rpp_modified: str = ""
+    stats_modified: str = ""
+    stats_is_stale: bool = False
     warnings: list[str] = field(default_factory=list)
 
     @property
@@ -573,14 +592,23 @@ def verify_project(
             warnings.append(f"no pude leer {stats_path}: {exc}")
         else:
             report.stats_path = str(stats_path)
+            # Si el proyecto se guardo DESPUES del dry run, la parte
+            # post-FX del informe describe una version que ya no existe.
+            # Es la primera pregunta que se hace cualquiera al abrirlo
+            # ("¿tengo que volver a analizar?"), asi que se responde sola.
+            stats_mtime = stats_path.stat().st_mtime
+            rpp_mtime = rpp_path.stat().st_mtime
+            report.stats_modified = datetime.fromtimestamp(stats_mtime).strftime("%d/%m/%Y %H:%M")
+            report.rpp_modified = datetime.fromtimestamp(rpp_mtime).strftime("%d/%m/%Y %H:%M")
+            report.stats_is_stale = stats_mtime < rpp_mtime
             en_stats = find_stats(stats, en_name)
             if en_stats is not None and math.isfinite(en_stats.lufs_i):
                 en_lufs_i = en_stats.lufs_i
     else:
         warnings.append(
-            "sin render_stats.html: no hay medida post-FX, asi que faltan el LUFS-I global, "
-            "el pico real y el veredicto sobre la envolvente. Haz un dry run en REAPER "
-            "(Render, 'Dry run (no output file)') y vuelve a analizar."
+            "sin medida de REAPER: faltan el nivel global, el pico real y el veredicto "
+            "sobre la envolvente. En REAPER, selecciona las pistas a analizar y ejecuta la "
+            "accion 'Calculate loudness of selected tracks via dry run render'."
         )
 
     report.en_reference_floor_lufs = round(en_lufs_i - EN_REFERENCE_MARGIN_DB, 2)
@@ -593,6 +621,129 @@ def verify_project(
         _analyse_stats(report, es_track, stats, es_name, en_name, report.tolerance_db)
 
     return report
+
+
+
+# --- traduccion de hallazgos a cosas que hacer ---
+
+REAPER_DRY_RUN_STEPS = (
+    "En REAPER: abre el proyecto, selecciona las pistas que quieras analizar "
+    "(«ES VOX» y «EN VOX») y ejecuta la accion "
+    "«Calculate loudness of selected tracks via dry run render». Al terminar, "
+    "vuelve aqui y pulsa «Re-analizar»."
+)
+# Margen que se considera comodo entre el pico y 0 dBFS. Por debajo de
+# esto, cualquier retoque posterior puede hacer que el audio sature.
+COMFORTABLE_HEADROOM_DB = 3.0
+MAX_SPOTS_LISTED = 20
+
+
+def _plain_direction(delta_db: float) -> str:
+    return "mas ALTO" if delta_db > 0 else "mas BAJO"
+
+
+def build_actions(report: VerifyReport) -> tuple[Action, ...]:
+    actions: list[Action] = []
+
+    if report.stats_path is None:
+        actions.append(Action(
+            urgency="alta",
+            title="Falta la medida de REAPER: este informe esta a medias",
+            why="Sin ella no se puede saber el volumen global real, ni cuanto margen queda "
+                "antes de que el audio sature, ni si la envolvente sigue haciendo bien su trabajo.",
+            how=REAPER_DRY_RUN_STEPS,
+        ))
+    elif report.stats_is_stale:
+        actions.append(Action(
+            urgency="alta",
+            title="Vuelve a medir: has tocado el proyecto despues del ultimo analisis",
+            why=f"La medida de REAPER es del {report.stats_modified} y el proyecto se guardo "
+                f"el {report.rpp_modified}. La parte de volumen global y pico describe una "
+                "version que ya no existe. El detalle por tramos si esta al dia.",
+            how=REAPER_DRY_RUN_STEPS,
+        ))
+
+    doubled = [i for i in report.items if i.status == STATUS_DOUBLE_GAIN]
+    if doubled:
+        worst = max(abs(i.delta_db) for i in doubled)
+        actions.append(Action(
+            urgency="alta",
+            title=f"Baja el volumen a {len(doubled)} trozos que en realidad son audio en ingles",
+            why="Son trozos del ingles colocados en su propio sitio, de los que usas para tapar "
+                "huecos. El problema es que encima les cae la subida de volumen calculada para el "
+                f"castellano, que ahi sobra: suenan hasta {worst:.1f} dB mas fuerte que en la "
+                "pelicula original. Se nota como un salto de volumen.",
+            how="En REAPER, en la envolvente de volumen de la pista «ES VOX», selecciona cada uno "
+                "de estos tramos y ponlo a 0 dB (o baja los dB que se indican).",
+            spots=tuple(
+                f"{format_timecode(i.start)} – {format_timecode(i.end)}  "
+                f"({i.end - i.start:.1f}s)  ·  ahora suena {i.delta_db:+.1f} dB de mas  ·  "
+                f"bajalo {abs(i.delta_db):.1f} dB"
+                for i in sorted(doubled, key=lambda i: -abs(i.delta_db))
+            ),
+        ))
+
+    off = [i for i in report.items if i.status == STATUS_OFF]
+    if off:
+        actions.append(Action(
+            urgency="media",
+            title=f"Escucha {len(off)} momentos donde el castellano se sale de nivel",
+            why="Comparados con el ingles de ese mismo instante, suenan mas alto o mas bajo de la "
+                "cuenta. Ojo: no todos son un fallo. A veces es simplemente que la frase doblada "
+                "no dura lo mismo que la inglesa. Por eso hay que escucharlos, no corregirlos a ciegas.",
+            how="Ve al minuto indicado, escucha, y si de verdad canta, ajusta la envolvente de "
+                "«ES VOX» en ese tramo los dB que dice la lista.",
+            spots=tuple(
+                f"{format_timecode(i.start)}  ({i.end - i.start:.1f}s)  ·  el castellano suena "
+                f"{abs(i.delta_db):.1f} dB {_plain_direction(i.delta_db)} que el ingles"
+                for i in sorted(off, key=lambda i: -abs(i.delta_db))[:MAX_SPOTS_LISTED]
+            ),
+        ))
+
+    g = report.global_check
+    if g and g.headroom_db < COMFORTABLE_HEADROOM_DB:
+        current = report.global_gain_db or 0.0
+        suggested = current - (COMFORTABLE_HEADROOM_DB - g.headroom_db)
+        actions.append(Action(
+            urgency="alta" if g.es_clips or g.headroom_db < 1.0 else "media",
+            title="Deja mas hueco antes de que el audio sature",
+            why=f"El momento mas fuerte llega a {g.es_peak_dbfs:.1f} dBFS. El techo absoluto es 0, "
+                f"o sea que solo quedan {g.headroom_db:.1f} dB de margen"
+                + (f" y ya hay {g.es_clips} muestras recortadas." if g.es_clips else
+                   ". Cualquier retoque que suba algo puede pasarse y distorsionar."),
+            how=f"En la pista «ES VOX», abre el efecto «JS: utility/volume» y baja «Adjustment» "
+                f"de {current:+.2f} dB a {suggested:+.2f} dB. Luego vuelve a medir para comprobarlo.",
+        ))
+
+    if report.flagged_windows:
+        actions.append(Action(
+            urgency="media",
+            title=f"Revisa {len(report.flagged_windows)} tramos largos que quedan descompensados",
+            why="No es un momento suelto: durante dos minutos seguidos el castellano queda por "
+                "encima o por debajo del ingles. Eso si se percibe como «esta parte suena rara».",
+            how="Escucha el tramo entero y, si hace falta, mueve la envolvente de «ES VOX» en bloque.",
+            spots=tuple(
+                f"{format_timecode(w.start)} – {format_timecode(w.end)}  ·  el castellano queda "
+                f"{abs(w.delta_db):.1f} dB {_plain_direction(w.delta_db)}"
+                for w in report.flagged_windows
+            ),
+        ))
+
+    if report.envelope:
+        helping = report.envelope.sd_with < report.envelope.sd_without
+        actions.append(Action(
+            urgency="info",
+            title="La envolvente de volumen: dejala como esta" if helping
+                  else "La envolvente de volumen ya no ayuda: conviene rehacerla",
+            why="La subida de volumen automatica se calculo antes de que sincronizaras a mano. "
+                + ("Comprobado: aun asi sigue acercando el castellano al ingles, mas que si no estuviera."
+                   if helping else
+                   "Comprobado: tal y como esta ahora deja el resultado PEOR que si no estuviera."),
+            how="No tienes que hacer nada." if helping else
+                "Vuelve a ejecutar el paso «loudness» con --force, o aplana la envolvente a 0 dB.",
+        ))
+
+    return tuple(actions)
 
 
 def write_report(layout: EpisodeLayout, report: VerifyReport) -> tuple[Path, Path]:
@@ -653,7 +804,93 @@ def _fmt(value: float, suffix: str = "") -> str:
     return f"{value:+.2f}{suffix}" if suffix == " dB" else f"{value:.2f}{suffix}"
 
 
+
+
+def _actions_html(actions: tuple[Action, ...]) -> str:
+    if not actions:
+        return "<p class='allgood'>Nada que tocar. El castellano cuadra con el ingles en todo el episodio.</p>"
+    blocks = []
+    for n, action in enumerate(actions, start=1):
+        spots = ""
+        if action.spots:
+            rows = "".join(f"<li>{spot}</li>" for spot in action.spots)
+            spots = f"<ol class='spots'>{rows}</ol>"
+        blocks.append(f"""
+    <div class="action {action.urgency}">
+      <h3><span class="num">{n}</span>{action.title}</h3>
+      <p class="why">{action.why}</p>
+      <p class="how"><b>Que hacer:</b> {action.how}</p>
+      {spots}
+    </div>""")
+    return "\n".join(blocks)
+
+
+def _summary_html(report: VerifyReport) -> str:
+    rows = []
+    g = report.global_check
+    if g:
+        verdict = ("cuadran" if abs(g.delta_db) <= 1.0 else
+                   f"el castellano queda {abs(g.delta_db):.1f} dB {_plain_direction(g.delta_db)}")
+        rows.append((
+            "Volumen general del episodio",
+            f"El castellano y el ingles {verdict}.",
+            "ok" if abs(g.delta_db) <= 1.0 else "warn",
+        ))
+        rows.append((
+            "Margen antes de saturar",
+            f"Quedan {g.headroom_db:.1f} dB hasta el techo"
+            + (f", y hay {g.es_clips} muestras recortadas." if g.es_clips else "."),
+            "bad" if g.headroom_db < 1 else "warn" if g.headroom_db < COMFORTABLE_HEADROOM_DB else "ok",
+        ))
+    if report.envelope:
+        helping = report.envelope.sd_with < report.envelope.sd_without
+        rows.append((
+            "Envolvente de volumen",
+            "Sigue ayudando: dejala." if helping else "Ya no ayuda: conviene rehacerla.",
+            "ok" if helping else "warn",
+        ))
+    rows.append((
+        "Tramos a revisar",
+        f"{len(report.flagged_items)} de {len(report.comparable_items)} comparables."
+        if report.flagged_items else "Ninguno.",
+        "warn" if report.flagged_items else "ok",
+    ))
+    cells = "".join(
+        f"<tr class='{tone}'><td>{name}</td><td>{text}</td></tr>" for name, text, tone in rows
+    )
+    return f"<table class='summary-table'>{cells}</table>"
+
+
+def _fx_html(report: VerifyReport) -> str:
+    if not report.fx_tax:
+        return ""
+    t = report.fx_tax
+    names = ", ".join(n for n in report.fx_names if not n.startswith("JS:")) or "los efectos"
+    if t.tax_db < 0:
+        effect = f"bajan el momento mas fuerte {abs(t.tax_db):.1f} dB"
+    else:
+        effect = f"suben el momento mas fuerte {t.tax_db:.1f} dB"
+    warning = ""
+    if t.predicted_peak_dbfs > 0:
+        warning = (
+            "<p class='danger'><b>Ojo con esto:</b> sin esos efectos el audio se saldria de escala "
+            f"({t.predicted_peak_dbfs:+.1f} dBFS, y el maximo es 0). Ahora mismo son ellos los que "
+            "estan evitando que sature. Si los quitas, los cambias de sitio o tocas sus ajustes, "
+            "vuelve a medir antes de dar el episodio por bueno.</p>"
+        )
+    return f"""
+    <h3>Que le hacen ReaEQ y ReaFir al volumen</h3>
+    <p>Los efectos de la pista «{report.es_track}» ({names}) {effect}:
+    de {t.predicted_peak_dbfs:.2f} dBFS antes de pasar por ellos a {t.measured_peak_dbfs:.2f} dBFS despues.</p>
+    {warning}
+    <p class='muted'>Para tecnicos: para que el render acabe con un pico objetivo P, pon
+    <code>peak_ceiling_dbfs = P {-t.tax_db:+.2f}</code> en <code>[loudness]</code> del perfil y
+    relanza el paso <code>loudness --force</code>.</p>"""
+
+
 def render_html(report: VerifyReport) -> str:
+    actions = build_actions(report)
+
     rows_items = "\n".join(
         f"<tr class='{_item_tone(i, report.item_tolerance_db)}'>"
         f"<td>{format_timecode(i.start)}</td><td>{i.end - i.start:.2f}s</td>"
@@ -678,14 +915,14 @@ def render_html(report: VerifyReport) -> str:
     )
 
     g = report.global_check
-    global_html = "<p class='muted'>Sin render_stats.html — no hay medida global post-FX.</p>"
+    global_html = "<p class='muted'>Sin medida de REAPER — no hay cifras globales post-efectos.</p>"
     if g:
         global_html = f"""
     <table>
       <tr><th></th><th>{report.es_track}</th><th>{report.en_track}</th><th>delta</th></tr>
       <tr class='{_tone(g.delta_db, 1.0)}'><td>LUFS-I</td><td>{g.es_lufs_i:.1f}</td><td>{g.en_lufs_i:.1f}</td><td><b>{g.delta_db:+.2f} dB</b></td></tr>
       <tr><td>LRA</td><td>{g.es_lra:.1f}</td><td>{g.en_lra:.1f}</td><td>{g.es_lra - g.en_lra:+.1f}</td></tr>
-      <tr class='{"bad" if g.headroom_db < 1 else "warn" if g.headroom_db < 3 else "ok"}'>
+      <tr class='{"bad" if g.headroom_db < 1 else "warn" if g.headroom_db < COMFORTABLE_HEADROOM_DB else "ok"}'>
         <td>Pico (dBFS)</td><td>{g.es_peak_dbfs:.1f}</td><td>{g.en_peak_dbfs:.1f}</td>
         <td><b>{g.headroom_db:.1f} dB de margen</b></td></tr>
       <tr class='{"bad" if g.es_clips else "ok"}'><td>Clips</td><td>{g.es_clips}</td><td>—</td><td></td></tr>
@@ -695,91 +932,96 @@ def render_html(report: VerifyReport) -> str:
     if report.envelope:
         e = report.envelope
         envelope_html = f"""
-    <p><b>{e.verdict}</b></p>
+    <p>Desviacion tipica del castellano respecto al ingles, por ventanas de {WINDOW_SECONDS:g}s:</p>
     <table>
       <tr><th></th><th>desviacion tipica</th><th>ventanas fuera de ±{report.tolerance_db:g} dB</th></tr>
-      <tr><td>con envolvente</td><td>{e.sd_with:.2f} dB</td><td>{e.windows_out_with} de {e.windows_total}</td></tr>
-      <tr><td>sin envolvente</td><td>{e.sd_without:.2f} dB</td><td>{e.windows_out_without} de {e.windows_total}</td></tr>
-    </table>"""
-
-    tax_html = ""
-    if report.fx_tax:
-        t = report.fx_tax
-        direction = "suman" if t.tax_db >= 0 else "restan"
-        clipping_note = ""
-        if t.predicted_peak_dbfs > 0:
-            clipping_note = (
-                f"<p class='danger'>El pico PRE-FX predicho es {t.predicted_peak_dbfs:+.2f} dBFS, "
-                "por encima de 0: la envolvente esta empujando la señal fuera de escala y lo unico "
-                "que evita el recorte es que la cadena de FX vuelva a bajarla. Es un margen "
-                "prestado — si tocas ReaEQ o ReaFir, se recorta.</p>"
-            )
-        tax_html = f"""
-    <h2>Impuesto de la cadena de FX</h2>
-    <p>Pico predicho sobre la señal cruda con las ganancias aplicadas: <b>{t.predicted_peak_dbfs:.2f} dBFS</b>.
-    Pico medido en el render: <b>{t.measured_peak_dbfs:.2f} dBFS</b>.
-    {', '.join(report.fx_names) or 'los FX'} {direction} <b>{abs(t.tax_db):.2f} dB</b>.</p>
-    {clipping_note}
-    <p class='muted'>Para que el render aterrice en un pico objetivo P, pon
-    <code>peak_ceiling_dbfs = P {-t.tax_db:+.2f}</code> en el perfil (seccion
-    <code>[loudness]</code>) y vuelve a lanzar el paso <code>loudness</code> con
-    <code>--force</code>.</p>"""
+      <tr><td>con la envolvente puesta</td><td>{e.sd_with:.2f} dB</td><td>{e.windows_out_with} de {e.windows_total}</td></tr>
+      <tr><td>si se quitara</td><td>{e.sd_without:.2f} dB</td><td>{e.windows_out_without} de {e.windows_total}</td></tr>
+    </table>
+    <p><b>{e.verdict}</b></p>"""
 
     warnings_html = ""
     if report.warnings:
         items = "".join(f"<li>{w}</li>" for w in report.warnings)
-        warnings_html = f"<div class='warnings'><h2>Avisos</h2><ul>{items}</ul></div>"
+        warnings_html = f"<div class='warnings'><h3>Avisos</h3><ul>{items}</ul></div>"
 
-    flagged_items = len(report.flagged_items)
-    flagged_windows = len(report.flagged_windows)
-    comparable = len(report.comparable_items)
-    skipped = len(report.items) - comparable
+    stats_line = "sin medida de REAPER"
+    if report.stats_path:
+        stats_line = f"medida de REAPER del {report.stats_modified}"
+        if report.stats_is_stale:
+            stats_line += f" (anterior al ultimo guardado del proyecto, {report.rpp_modified})"
 
     return f"""<!doctype html>
 <html lang="es"><head><meta charset="utf-8">
-<title>verify — {report.episode}</title>
+<title>Revision de {report.episode}</title>
 <style>
   :root {{ color-scheme: light dark; }}
-  body {{ font-family: -apple-system, system-ui, sans-serif; max-width: 1100px; margin: 2rem auto; padding: 0 1rem; }}
-  h1 {{ font-size: 1.4rem; }} h2 {{ font-size: 1.05rem; margin-top: 2rem; }}
+  body {{ font-family: -apple-system, system-ui, sans-serif; max-width: 900px; margin: 2rem auto;
+         padding: 0 1rem; line-height: 1.5; }}
+  h1 {{ font-size: 1.5rem; margin-bottom: 0.2rem; }}
+  h2 {{ font-size: 1.15rem; margin-top: 2.5rem; }}
+  h3 {{ font-size: 1rem; }}
   table {{ width: 100%; border-collapse: collapse; margin: 0.6rem 0 1.4rem; font-size: 0.86rem; }}
   th, td {{ text-align: right; padding: 0.3rem 0.5rem; border-bottom: 1px solid #8883; }}
   th:first-child, td:first-child, td.note {{ text-align: left; }}
   td.note {{ color: #888; font-size: 0.8rem; }}
-  tr.ok td {{ }} tr.warn td {{ background: #f0ad4e22; }} tr.bad td {{ background: #d9534f33; }}
+  tr.warn td {{ background: #f0ad4e22; }} tr.bad td {{ background: #d9534f33; }}
   tr.muted td {{ color: #888; }}
+  .summary-table td {{ text-align: left; font-size: 0.95rem; }}
+  .summary-table td:first-child {{ width: 15rem; color: #888; }}
   .muted {{ color: #888; font-size: 0.85rem; }}
-  .summary {{ display: flex; gap: 1.5rem; flex-wrap: wrap; margin: 1rem 0; }}
-  .card {{ border: 1px solid #8883; border-radius: 8px; padding: 0.7rem 1rem; min-width: 9rem; }}
-  .card b {{ display: block; font-size: 1.5rem; }}
+  .action {{ border-left: 4px solid #8886; padding: 0.1rem 0 0.1rem 1rem; margin: 1.4rem 0; }}
+  .action.alta {{ border-color: #d9534f; }}
+  .action.media {{ border-color: #f0ad4e; }}
+  .action.info {{ border-color: #5bc0de; }}
+  .action h3 {{ margin: 0.4rem 0; }}
+  .action .num {{ display: inline-block; width: 1.6rem; height: 1.6rem; line-height: 1.6rem;
+                  text-align: center; border-radius: 50%; background: #8883; margin-right: 0.5rem;
+                  font-size: 0.85rem; }}
+  .action .why {{ margin: 0.3rem 0; }}
+  .action .how {{ margin: 0.3rem 0; }}
+  .spots {{ font-family: ui-monospace, monospace; font-size: 0.82rem; margin: 0.5rem 0 0;
+            padding-left: 1.4rem; }}
+  .spots li {{ margin: 0.15rem 0; }}
+  .allgood {{ font-size: 1.05rem; }}
   .warnings {{ border-left: 3px solid #f0ad4e; padding-left: 0.9rem; }}
   .danger {{ border-left: 3px solid #d9534f; padding-left: 0.9rem; }}
+  details {{ margin-top: 2.5rem; border-top: 1px solid #8883; padding-top: 0.8rem; }}
+  details summary {{ cursor: pointer; font-size: 1.05rem; font-weight: 600; }}
   code {{ background: #8882; padding: 0.1rem 0.3rem; border-radius: 3px; }}
 </style></head><body>
-<h1>verify — {report.episode}</h1>
-<p class="muted">{report.generated_at} · {report.rpp_path}<br>
-{report.item_count} items en «{report.es_track}» ({report.muted_items} muteados) ·
-fuentes: {', '.join(report.sources) or '—'} ·
-ganancia global {report.global_gain_db:+.2f} dB · envolvente de {report.envelope_points} puntos ·
-FX: {', '.join(report.fx_names) or '—'}</p>
 
-<div class="summary">
-  <div class="card">items desviados<b>{flagged_items}</b>de {comparable} comparables</div>
-  <div class="card">sin juzgar<b>{skipped}</b>cortos o sin referencia</div>
-  <div class="card">ventanas desviadas<b>{flagged_windows}</b>de {len(report.windows)}</div>
-  <div class="card">tolerancia<b>±{report.tolerance_db:g}</b>dB ventana · ±{report.item_tolerance_db:g} item</div>
-</div>
+<h1>Revision de {report.episode}</h1>
+<p class="muted">Analizado el {report.generated_at.replace("T", " a las ")} · {stats_line}</p>
+
+<h2>Que tengo que hacer</h2>
+{_actions_html(actions)}
+
+<h2>Como ha quedado</h2>
+{_summary_html(report)}
 
 {warnings_html}
 
-<h2>Global (post-FX)</h2>
+<details>
+<summary>Detalle tecnico</summary>
+
+<h3>Contexto del proyecto</h3>
+<p class="muted">{report.rpp_path}<br>
+{report.item_count} items en «{report.es_track}» ({report.muted_items} muteados) ·
+fuentes: {', '.join(report.sources) or '—'} ·
+ganancia global {report.global_gain_db:+.2f} dB · envolvente de {report.envelope_points} puntos ·
+FX: {', '.join(report.fx_names) or '—'} ·
+tolerancias ±{report.tolerance_db:g} dB por ventana, ±{report.item_tolerance_db:g} dB por item</p>
+
+<h3>Global (despues de los efectos)</h3>
 {global_html}
 
-<h2>¿Sigue valiendo la envolvente?</h2>
+<h3>¿Sigue valiendo la envolvente?</h3>
 {envelope_html}
-{tax_html}
 
-<h2>Items — nivel resultante contra {report.en_track}</h2>
+{_fx_html(report)}
+
+<h3>Items — nivel resultante contra {report.en_track}</h3>
 <p class="muted">La fuente es contexto, no un fallo: rellenar con otro audio es legitimo.
 Lo que se marca es que el nivel FINAL del item se aparte de la referencia inglesa.
 «env» es la ganancia media que la envolvente aplica sobre ese item.
@@ -791,15 +1033,17 @@ quedan sin juzgar: ahi no hay referencia, solo fraseo que no coincide.</p>
 {rows_items}
 </table>
 
-<h2>Deriva por ventanas de {WINDOW_SECONDS:g}s (p{SPEECH_PERCENTILE} de LUFS-S)</h2>
+<h3>Deriva por ventanas de {WINDOW_SECONDS:g}s (p{SPEECH_PERCENTILE} de LUFS-S)</h3>
 <table>
 <tr><th>ventana</th><th>ES</th><th>EN</th><th>delta</th></tr>
-{rows_windows or "<tr><td colspan=4 class='note'>sin render_stats.html</td></tr>"}
+{rows_windows or "<tr><td colspan=4 class='note'>sin medida de REAPER</td></tr>"}
 </table>
 
-<h2>Puntos sueltos mas desviados</h2>
+<h3>Puntos sueltos mas desviados</h3>
 <table>
 <tr><th>instante</th><th>ES LUFS-S</th><th>EN LUFS-S</th><th>delta</th></tr>
-{rows_hotspots or "<tr><td colspan=4 class='note'>sin render_stats.html</td></tr>"}
+{rows_hotspots or "<tr><td colspan=4 class='note'>sin medida de REAPER</td></tr>"}
 </table>
+
+</details>
 </body></html>"""
