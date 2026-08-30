@@ -640,7 +640,8 @@ def verify(
         for spot in action.spots[:12]:
             console.print(f"     · {spot}", highlight=False)
         if len(action.spots) > 12:
-            console.print(f"     · … y {len(action.spots) - 12} mas (ver el informe)", highlight=False)
+            console.print(
+                f"     · … y {len(action.spots) - 12} más, en el informe completo", highlight=False)
 
     console.print(
         f"\n[dim]Detalle — {report.item_count} items en «{report.es_track}», "

@@ -660,6 +660,21 @@ def _spot(start: float, end: float, delta_db: float) -> str:
     )
 
 
+
+def _spots_in_playback_order(findings: list, limit: int | None = None) -> tuple[str, ...]:
+    """Los `limit` tramos mas graves, pero listados de principio a fin.
+
+    Recortar y ordenar son dos decisiones distintas. Se recorta por
+    gravedad (si hay que dejar fuera algo, que sea lo menos importante) y
+    se lista por tiempo, que es como se revisa: del minuto 4 al 48
+    seguidos, sin ir saltando por el episodio.
+    """
+    worst = sorted(findings, key=lambda f: -abs(f.delta_db))
+    if limit is not None:
+        worst = worst[:limit]
+    return tuple(_spot(f.start, f.end, f.delta_db) for f in sorted(worst, key=lambda f: f.start))
+
+
 def build_actions(report: VerifyReport) -> tuple[Action, ...]:
     actions: list[Action] = []
 
@@ -693,10 +708,7 @@ def build_actions(report: VerifyReport) -> tuple[Action, ...]:
                 "película original. Se nota como un salto de volumen.",
             how="En REAPER, en la envolvente de volumen de la pista «ES VOX», selecciona cada uno "
                 "de estos tramos y ponlo a 0 dB (o baja los dB que se indican).",
-            spots=tuple(
-                _spot(i.start, i.end, i.delta_db)
-                for i in sorted(doubled, key=lambda i: -abs(i.delta_db))
-            ),
+            spots=_spots_in_playback_order(doubled),
         ))
 
     off = [i for i in report.items if i.status == STATUS_OFF]
@@ -707,12 +719,10 @@ def build_actions(report: VerifyReport) -> tuple[Action, ...]:
             why="Comparados con el inglés de ese mismo instante, suenan más alto o más bajo de la "
                 "cuenta. Ojo: no todos son un fallo. A veces es simplemente que la frase doblada "
                 "no dura lo mismo que la inglesa. Por eso hay que escucharlos, no corregirlos a ciegas.",
-            how="Ve al minuto indicado, escucha, y si de verdad canta, ajusta la envolvente de "
+            how="Van en orden de principio a fin, para que puedas revisarlos del tirón. Ve al "
+                "minuto indicado, escucha, y si de verdad canta, ajusta la envolvente de "
                 "«ES VOX» en ese tramo los dB que dice la lista.",
-            spots=tuple(
-                _spot(i.start, i.end, i.delta_db)
-                for i in sorted(off, key=lambda i: -abs(i.delta_db))[:MAX_SPOTS_LISTED]
-            ),
+            spots=_spots_in_playback_order(off, MAX_SPOTS_LISTED),
         ))
 
     g = report.global_check
@@ -761,9 +771,7 @@ def build_actions(report: VerifyReport) -> tuple[Action, ...]:
             why="No es un momento suelto: durante dos minutos seguidos el castellano queda por "
                 "encima o por debajo del inglés. Eso sí se percibe como «esta parte suena rara».",
             how="Escucha el tramo entero y, si hace falta, mueve la envolvente de «ES VOX» en bloque.",
-            spots=tuple(
-                _spot(w.start, w.end, w.delta_db) for w in report.flagged_windows
-            ),
+            spots=_spots_in_playback_order(list(report.flagged_windows)),
         ))
 
     if report.envelope:

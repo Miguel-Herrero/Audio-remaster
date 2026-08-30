@@ -96,9 +96,28 @@ def test_english_patches_become_one_action_with_one_line_per_spot():
     action = next(a for a in build_actions(report) if "audio en inglés" in a.title)
     assert action.urgency == "alta"
     assert len(action.spots) == 2
-    # ordenado por gravedad, y la linea dice la ACCION, no la observacion
-    assert action.spots[0] == "5:17.000 → 5:20.000 (3.0s): ES baja 6.0 dB (suena más alto que EN)"
+    # en orden de reproduccion (4:54 antes que 5:17), no por gravedad
+    assert action.spots[0] == "4:54.000 → 4:57.000 (3.0s): ES baja 2.8 dB (suena más alto que EN)"
+    assert action.spots[1] == "5:17.000 → 5:20.000 (3.0s): ES baja 6.0 dB (suena más alto que EN)"
     assert "envolvente de volumen" in action.how
+
+
+def test_spots_are_listed_in_playback_order_but_trimmed_by_severity():
+    """Recortar y ordenar son decisiones distintas: si sobran tramos se
+    cae el menos grave, pero lo que queda se lista de principio a fin.
+    """
+    from remaster.steps.verify import MAX_SPOTS_LISTED
+
+    # uno leve al principio y muchos graves despues: el leve es el que sobra
+    items = [_item(STATUS_OFF, 6.1, start=1.0)]
+    items += [_item(STATUS_OFF, 20.0, start=100.0 + 10 * n) for n in range(MAX_SPOTS_LISTED)]
+    report = _report(global_check=_healthy_global(), items=tuple(items))
+    action = next(a for a in build_actions(report) if "Escucha" in a.title)
+
+    assert len(action.spots) == MAX_SPOTS_LISTED
+    assert "0:01.000" not in action.spots[0]  # el leve se ha caido
+    starts = [spot.split(" →")[0] for spot in action.spots]
+    assert starts == sorted(starts, key=lambda t: (int(t.split(":")[0]), float(t.split(":")[1])))
 
 
 def test_deviating_items_are_framed_as_listen_first_not_fix_blindly():
