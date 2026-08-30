@@ -34,8 +34,8 @@ from pathlib import Path
 
 import numpy as np
 
-from ..audio.envelope import energy_envelope_db, load_mono
-from ..audio.lufs import LufsError, clamp_db, db_to_linear_gain, max_safe_gain_db, measure_lufs
+from ..audio.envelope import energy_envelope_db, load_mono, load_mono_and_peak_frames
+from ..audio.lufs import LufsError, clamp_db, db_to_linear_gain, max_safe_gain_db_from_peaks, measure_lufs
 from ..audio.scenes import detect_scene_boundaries, scenes_from_boundaries
 from ..layout import EpisodeLayout
 from ..manifest import Manifest, StepResult
@@ -45,15 +45,24 @@ from .align import MAX_SANE_DRIFT_SLOPE, AlignResult, source_time_at
 
 RAMP_SECONDS = 0.15
 MIN_SCENE_SECONDS_FOR_LUFS = 0.5  # pyloudnorm necesita bloques de duracion minima
-# Margen bajo 0dBFS. Esta funcion solo mide el pico de la señal CRUDA
-# (antes de ReaEQ) — no simula el EQ. Medido en un episodio real,
-# localizando la muestra exacta que clipeaba: pico crudo -9.78dBFS + gain
-# 6.00dB deberia dar -3.78dBFS, pero el render completo (gain + envolvente
-# + ReaEQ + cuantizado a 16-bit) daba 0dBFS — un "impuesto" de ~3.8dB no
-# explicado por la ganancia, casi seguro ReaEQ interactuando con
-# contenido de alta frecuencia (una sibilante) que un techo sobre la
-# señal cruda no puede ver. -6dBFS deja margen de sobra para ese efecto,
-# verificado con un render real tras el cambio.
+PEAK_FRAME_MS = 20.0
+# Margen bajo 0dBFS sobre la señal CRUDA (antes de ReaEQ/ReaFir) — este
+# techo no simula la cadena de FX.
+#
+# Historia, porque el valor parece arbitrario y no lo es. Se calibro a
+# -6.0 dBFS a ojo, para tapar un "impuesto" de ~3.8 dB entre lo que
+# predecia el techo y lo que salia del render, atribuido entonces a
+# ReaEQ. Al medir de verdad (ver load_mono_and_peak_frames) resulto que
+# ~2.6 dB de ese impuesto no era ReaEQ sino que el pico se estaba
+# midiendo sobre el downmix a mono, que lo escondia. Corregida la
+# medida, el techo pasa a significar lo que dice: pico crudo real.
+#
+# Consecuencia practica al arreglarlo: con el mismo -6.0 la ganancia
+# global sale mas conservadora que antes (en s03e01, -3.4 dB en vez de
+# -0.8 dB) y el render aterriza ~-3.4 dBFS en vez de -0.8 dBFS. Si eso
+# deja el castellano demasiado bajo, el techo se sube desde el perfil
+# (`[loudness] peak_ceiling_dbfs`) con el dato que da `remaster verify`,
+# que mide el impuesto real de la cadena de FX en vez de suponerlo.
 PEAK_CEILING_DBFS = -6.0
 
 
@@ -67,12 +76,16 @@ def _scene_relative_gain_db(
     es_samples: np.ndarray, en_samples: np.ndarray, sr: int,
     start_s: float, end_s: float, max_delta_db: float, global_gain_db: float,
     align: AlignResult,
+    es_peak_frames: np.ndarray | None = None, peak_frame_rate: float = 0.0,
+    peak_ceiling_dbfs: float = PEAK_CEILING_DBFS,
 ) -> float | None:
     # EN nunca se desplaza: en_samples[t] es directamente el instante t.
     # ES si: el instante t de la linea de tiempo suena en
     # source_time_at(align, t) del fichero ES crudo (ver steps/align.py).
-    es_i0 = int(source_time_at(align, start_s) * sr)
-    es_i1 = int(source_time_at(align, end_s) * sr)
+    es_t0 = source_time_at(align, start_s)
+    es_t1 = source_time_at(align, end_s)
+    es_i0 = int(es_t0 * sr)
+    es_i1 = int(es_t1 * sr)
     en_i0, en_i1 = int(start_s * sr), int(end_s * sr)
     if (en_i1 - en_i0) / sr < MIN_SCENE_SECONDS_FOR_LUFS or es_i1 <= es_i0 or es_i0 < 0 or es_i1 > len(es_samples):
         return None
@@ -86,8 +99,14 @@ def _scene_relative_gain_db(
         return None
     absolute_delta = clamp_db(lufs_en - lufs_es, max_delta_db)
     # La ganancia TOTAL en este tramo (global + relativa) no puede
-    # superar lo que su propio pico local admite sin recortar.
-    absolute_delta = min(absolute_delta, max_safe_gain_db(es_segment, PEAK_CEILING_DBFS))
+    # superar lo que su propio pico local admite sin recortar. El pico se
+    # toma del array por frames, que conserva los canales por separado —
+    # medirlo sobre `es_segment` (mono) lo subestimaria.
+    if es_peak_frames is not None and peak_frame_rate > 0:
+        f0 = max(0, int(es_t0 * peak_frame_rate))
+        f1 = min(len(es_peak_frames), int(np.ceil(es_t1 * peak_frame_rate)))
+        if f1 > f0:
+            absolute_delta = min(absolute_delta, max_safe_gain_db_from_peaks(es_peak_frames[f0:f1], peak_ceiling_dbfs))
     return absolute_delta - global_gain_db
 
 
@@ -101,17 +120,18 @@ def compute_loudness(
     clamped_drift = max(-MAX_SANE_DRIFT_SLOPE, min(MAX_SANE_DRIFT_SLOPE, align.drift_slope))
     align = AlignResult(align.offset_seconds, clamped_drift, align.confidence, align.low_confidence)
 
-    es_samples, sr_es = load_mono(es_vox_path)
+    es_samples, sr_es, es_peak_frames, peak_frame_rate = load_mono_and_peak_frames(es_vox_path, PEAK_FRAME_MS)
     en_samples, sr_en = load_mono(en_vox_path)
     me_samples, sr_me = load_mono(en_me_path)
     if not (sr_es == sr_en == sr_me):
         raise ValueError(f"Sample rates distintos: ES VOX={sr_es} EN VOX={sr_en} EN M&E={sr_me}")
     sr = sr_es
+    ceiling = config.peak_ceiling_dbfs
 
     lufs_es_global = measure_lufs(es_samples, sr)
     lufs_en_global = measure_lufs(en_samples, sr)
     lufs_matching_gain = lufs_en_global - lufs_es_global
-    global_gain_db = clamp_db(min(lufs_matching_gain, max_safe_gain_db(es_samples, PEAK_CEILING_DBFS)), config.max_delta_db)
+    global_gain_db = clamp_db(min(lufs_matching_gain, max_safe_gain_db_from_peaks(es_peak_frames, ceiling)), config.max_delta_db)
 
     env_db, frame_rate = energy_envelope_db(me_samples, sr, frame_ms=20.0)
     boundaries = detect_scene_boundaries(env_db, frame_rate, config.scene_min_silence_db, config.scene_min_duration_s)
@@ -122,7 +142,10 @@ def compute_loudness(
         return LoudnessResult(global_gain_db, (VolPoint(0.0, 1.0), VolPoint(total_duration, 1.0)))
 
     gains_db = [
-        _scene_relative_gain_db(es_samples, en_samples, sr, start, end, config.max_delta_db, global_gain_db, align) or 0.0
+        _scene_relative_gain_db(
+            es_samples, en_samples, sr, start, end, config.max_delta_db, global_gain_db, align,
+            es_peak_frames, peak_frame_rate, ceiling,
+        ) or 0.0
         for start, end in scenes
     ]
 
@@ -157,7 +180,11 @@ def loudness_step(
         # calibracion de sync no invalidaria un loudness.json ya cacheado.
         "offset_seconds": align.offset_seconds,
         "drift_slope": align.drift_slope,
-        "peak_ceiling_dbfs": PEAK_CEILING_DBFS,
+        "peak_ceiling_dbfs": config.peak_ceiling_dbfs,
+        # El pico paso de medirse sobre el downmix a mono a medirse sobre
+        # todos los canales: la ganancia que sale es otra, asi que un
+        # loudness.json cacheado con el metodo viejo tiene que invalidarse.
+        "peak_measure": "per_channel_frames",
     }
 
     def fn() -> None:

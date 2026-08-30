@@ -33,7 +33,6 @@ class Languages:
 class MuxConfig:
     es_track_name: str
     title_template: str  # p.ej. "Sherlock Holmes (1984) {code}"
-    series_title: str  # para el nombre de fichero final, ver remaster/naming.py
 
 
 @dataclass(frozen=True)
@@ -41,6 +40,21 @@ class LoudnessConfig:
     max_delta_db: float
     scene_min_silence_db: float
     scene_min_duration_s: float
+    # Techo de pico sobre la señal cruda (ver steps/loudness.py, donde el
+    # valor tiene su historia). Opcional en el TOML: sin la clave, -6.0.
+    peak_ceiling_dbfs: float = -6.0
+    # Umbral con el que `remaster verify` marca una VENTANA (nivel de
+    # dialogo agregado sobre 2 min) como desviada respecto a EN VOX.
+    verify_tolerance_db: float = 2.0
+    # Umbral para un ITEM suelto, mucho mas alto a proposito. Comparar el
+    # LUFS de un item de 2s de doblaje con el ingles del mismo instante
+    # mide sobre todo que el fraseo no coincide: medido sobre un episodio
+    # ya bien mezclado, la mediana de |delta| por item es 1.85 dB y el p90
+    # 4.66 dB SIN que haya nada mal. Con 2 dB se marcaria casi la mitad de
+    # los items y el informe no serviria de nada. 6 dB = por encima de la
+    # mayor correccion que el propio pipeline puede aplicar
+    # (`max_delta_db`), asi que lo que pase de ahi merece una escucha.
+    verify_item_tolerance_db: float = 6.0
 
 
 @dataclass(frozen=True)

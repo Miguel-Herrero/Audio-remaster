@@ -3,20 +3,27 @@ extraidas/separadas/sincronizadas y el loudness ya calculado. No hay
 sesion REAPER de por medio — se escribe el fichero directamente
 (ver remaster/reaper/rpp.py).
 
-Se generan dos ficheros dentro de `<ep>/`:
-  - `<ep>.RPP`        — todo audible, para retocar/parchear a mano.
-  - `<ep>_render.RPP` — solo ES VOX + EN M&E audibles, listo para
-                         `REAPER -renderproject` sin depender de nada
-                         configurado a mano en el dialogo de render.
+Genera un unico fichero, `<ep>/<ep>.RPP`: todo audible, para retocar y
+parchear a mano. El `<ep>_render.RPP` que se renderiza ya no se escribe
+aqui — lo deriva el paso `render` a partir de este, para que recoja las
+ediciones manuales (ver reaper/rpp_render.py).
+
+Este paso NO pisa un `<ep>.RPP` que hayas editado. El manifiesto guarda
+el hash del fichero tal y como lo escribio la ultima vez; si el de disco
+no coincide, es que lo has tocado y regenerarlo se llevaria por delante
+horas de sync a mano. Se aborta con un error que dice que hacer. Con
+`--force` se procede, pero dejando antes una copia con marca de tiempo.
 """
 
 from __future__ import annotations
 
+import shutil
+import time
 from dataclasses import replace
 from pathlib import Path
 
 from ..layout import EpisodeLayout
-from ..manifest import Manifest, StepResult
+from ..manifest import Manifest, StepResult, sha256_file
 from ..probe import probe_file
 from ..profile import Profile
 from ..reaper.rpp import (
@@ -33,7 +40,17 @@ from ..sources import ClassifiedSources
 from .align import MAX_SANE_DRIFT_SLOPE, AlignResult, source_time_at
 from .loudness import LoudnessResult
 
+# Pistas que no deben sonar en el render final: el ingles hablado y el
+# fondo musical castellano (se usa el ingles, que es el bueno). Por clave
+# de pista, no por nombre — el nombre lo pone el perfil de serie.
 MUTED_IN_RENDER = {"EN_VOX", "ES_ME"}
+# Y las que si o si tienen que sonar, aunque el usuario las haya muteado
+# para escuchar algo suelto y se le haya olvidado desmutearlas.
+AUDIBLE_IN_RENDER = {"ES_VOX", "EN_ME"}
+
+
+class ProjectEditedError(RuntimeError):
+    """El `<ep>.RPP` de disco no es el que escribio el pipeline."""
 
 # Umbral por debajo del cual el drift acumulado en todo el episodio no
 # compensa trocear: un solo item con offset constante ya es indistinguible.
@@ -224,6 +241,34 @@ def build_tracks(
     return (video_track, en_vox_track, en_me_track, es_vox_track, es_me_track)
 
 
+
+def _guard_hand_edits(layout: EpisodeLayout, manifest: Manifest, force: bool) -> None:
+    """Aborta si el `<ep>.RPP` de disco no es el que dejo este paso.
+
+    El manifiesto ya guarda el hash de cada salida, asi que la
+    comprobacion es exacta: distinto hash = lo has editado. Sin esto, un
+    cambio en cualquier parametro del paso (por ejemplo la ganancia
+    global, que cambia sola al recalcular loudness) basta para que el
+    paso se considere desactualizado y reescriba el proyecto encima de
+    todo el trabajo manual.
+    """
+    if not layout.rpp_edit.exists():
+        return
+    recorded = (manifest.get("project") or {}).get("outputs", {}).get(str(layout.rpp_edit))
+    if recorded is None or sha256_file(layout.rpp_edit) == recorded:
+        return
+    if not force:
+        raise ProjectEditedError(
+            f"{layout.rpp_edit} tiene cambios que no hizo el pipeline (lo has editado a mano).\n"
+            "Regenerarlo borraria esos cambios. Opciones:\n"
+            "  - salta este paso: ejecuta el rango desde 'render' en adelante;\n"
+            "  - si de verdad quieres regenerarlo, repite con --force "
+            "(se guarda una copia con marca de tiempo antes de escribir)."
+        )
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    backup = layout.rpp_edit.with_suffix(f".RPP.bak-{stamp}")
+    shutil.copy2(layout.rpp_edit, backup)
+
 def build_project_step(
     sources: ClassifiedSources,
     layout: EpisodeLayout,
@@ -260,31 +305,22 @@ def build_project_step(
     }
 
     def fn() -> None:
+        _guard_hand_edits(layout, manifest, force)
         tracks = build_tracks(
             sources, profile, en_vox_path, en_me_path, es_vox_path, es_me_path,
             align, loudness, layout.code,
         )
-
         edit_project = Project(
             episode_code=layout.code, tracks=tracks,
             render=RenderSettings(output_file=layout.es_reconstructed),
         )
         write_project(edit_project, layout.rpp_edit)
 
-        render_tracks = tuple(
-            replace(t, muted=(t.key in MUTED_IN_RENDER)) for t in tracks
-        )
-        render_project = Project(
-            episode_code=layout.code, tracks=render_tracks,
-            render=RenderSettings(output_file=layout.es_reconstructed),
-        )
-        write_project(render_project, layout.rpp_render)
-
     return manifest.run_step(
         step_name="project",
         input_paths=[en_vox_path, en_me_path, es_vox_path, es_me_path, layout.align_json_path],
         params=params,
-        output_paths=[layout.rpp_edit, layout.rpp_render],
+        output_paths=[layout.rpp_edit],
         tool_versions={},
         fn=fn,
         force=force,

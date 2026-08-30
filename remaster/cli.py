@@ -21,15 +21,17 @@ from .naming import build_final_filename
 from .notes import write_notes
 from .probe import probe_file
 from .profile import Profile, load_profile
+from .reaper.render_stats import newest_render_stats
 from .sources import ClassifiedSources, SourceOverrides, SourcesError, classify_sources
 from .steps.align import CalibrationPoint, CalibrationResult, calibrate_from_points, manual_align, run_align
 from .steps.extract import extract_all
 from .steps.loudness import loudness_step
 from .steps.mux import mux_step, subtitle_languages
-from .steps.project import build_project_step
+from .steps.project import ProjectEditedError, build_project_step
 from .steps.remux4k import remux4k_step
 from .steps.render import REAPER_BINARY, render_step
 from .steps.retime import retime_step
+from .steps.verify import STATUS_DOUBLE_GAIN, VerifyError, build_actions, format_timecode, verify_project, write_report
 from .steps.separate import LocalSeparatorBackend, MvsepSeparatorBackend, SeparatorBackend, separate_all
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
@@ -174,13 +176,13 @@ def run(
     separator: str = typer.Option("local", help="Backend de separacion: local | mvsep"),
     mvsep_token: Optional[str] = typer.Option(None, help="Token de MVSEP (mejor usar MVSEP_API_TOKEN)"),
     model_dir: Path = typer.Option(DEFAULT_MODEL_DIR, help="Directorio de pesos del separador local"),
-    title: Optional[str] = typer.Option(None, help="Titulo (metadato interno del MKV); por defecto se deriva de --episode-title o del Blu-ray"),
-    episode_title: Optional[str] = typer.Option(
-        None, "--episode-title",
-        help='Titulo del episodio (p.ej. "El problema final"). Si se da, el fichero final se nombra '
-             '"<serie> <SxxExx> <titulo> - [<res>p <codec>] [FLAC ...] [Subs ...].mkv"; si no, se usa el nombre del Blu-ray tal cual.',
+    title: Optional[str] = typer.Option(None, help="Titulo (metadato interno del MKV); por defecto, el de --name o el del Blu-ray"),
+    final_name: Optional[str] = typer.Option(
+        None, "--name",
+        help='Nombre completo del fichero final hasta el guion, tal cual y sin interpolar nada '
+             '(p.ej. "Las aventuras de Sherlock Holmes (1984) S02E06 El problema final"). Queda '
+             '"<name> - [<res>p <codec>] [FLAC ...] [Subs ...].mkv". Sin esto se usa el nombre del Blu-ray tal cual.',
     ),
-    series_title: Optional[str] = typer.Option(None, "--series-title", help="Sobrescribe el titulo de serie del perfil para el nombre de fichero"),
     out_dir: Optional[Path] = typer.Option(None, "--out-dir", help="Carpeta de salida del MKV final (por defecto, la raiz del episodio)"),
     es_source: Optional[Path] = typer.Option(None, help="Forzar fichero fuente del DVD castellano"),
     es_track: Optional[int] = typer.Option(None, help="Forzar indice de stream del audio castellano"),
@@ -360,11 +362,15 @@ def run(
     # --- project ---
     if runs("project"):
         console.print("\n[bold]project[/bold]")
-        project_result = build_project_step(
-            classified, layout, profile,
-            en_vocals, en_instrumental, es_vocals, es_instrumental,
-            align_result, loudness_result, manifest, force=force,
-        )
+        try:
+            project_result = build_project_step(
+                classified, layout, profile,
+                en_vocals, en_instrumental, es_vocals, es_instrumental,
+                align_result, loudness_result, manifest, force=force,
+            )
+        except ProjectEditedError as exc:
+            console.print(f"\n[red]{exc}[/red]")
+            raise typer.Exit(1) from exc
         _report_step(layout.rpp_edit.name, project_result)
         from .steps.project import MIN_TOTAL_DRIFT_TO_SEGMENT_S
         total_drift = abs(align_result.drift_slope) * probe_file(en_vocals).duration
@@ -374,7 +380,7 @@ def run(
                 f"~{total_drift:.2f}s acumulados en todo el episodio"
             )
     else:
-        _expect(layout.rpp_render, "project")
+        _expect(layout.rpp_edit, "project")
 
     if hi == STEP_ORDER.index("project"):
         console.print("\n[green]Listo.[/green]")
@@ -384,7 +390,8 @@ def run(
     if runs("render"):
         console.print("\n[bold]render[/bold]")
         expected_duration = probe_file(en_vocals).duration
-        render_result = render_step(layout, expected_duration, manifest, reaper_binary=reaper_binary, force=force)
+        render_result = render_step(
+            layout, expected_duration, manifest, profile, reaper_binary=reaper_binary, force=force)
         _report_step(layout.es_reconstructed.name, render_result)
     else:
         _expect(layout.es_reconstructed, "render")
@@ -395,13 +402,12 @@ def run(
 
     # --- mux ---
     out_dir_resolved = (out_dir or layout.root).expanduser().resolve()
-    resolved_series_title = series_title or profile.mux.series_title
     audio_langs = ["eng", "spa"] + (["jpn"] if classified.ja else [])
 
-    if episode_title:
+    if final_name:
         sub_langs = subtitle_languages(classified.bluray_container, mkvmerge_path)
         output_filename = build_final_filename(
-            resolved_series_title, layout.code, episode_title,
+            final_name,
             classified.bluray_video.height, classified.bluray_video.codec_name,
             audio_langs, sub_langs,
         )
@@ -413,8 +419,8 @@ def run(
         console.print("\n[bold]mux[/bold]")
         mux_title = title
         if mux_title is None:
-            if episode_title:
-                mux_title = f"{resolved_series_title} {layout.code.upper()}: {episode_title}"
+            if final_name:
+                mux_title = final_name
             else:
                 from .steps.remux4k import container_title
                 mux_title = container_title(classified.bluray_container, mkvmerge_path) or profile.mux.title_template.format(code=layout.code)
@@ -440,9 +446,9 @@ def run(
         return
 
     console.print("\n[bold]remux4k[/bold]")
-    if episode_title:
+    if final_name:
         output_4k = out_dir_resolved / build_final_filename(
-            resolved_series_title, layout.code, episode_title,
+            final_name,
             classified.remaster4k.video.height, classified.remaster4k.video.codec_name,
             audio_langs, ["eng"],
         )
@@ -580,6 +586,144 @@ def notes(episode: Path = typer.Argument(..., help="Carpeta del episodio")) -> N
         raise typer.Exit(1)
     path = write_notes(layout, manifest)
     console.print(f"[green]Escrito:[/green] {path}")
+
+
+@app.command()
+def verify(
+    episode: Path = typer.Argument(..., help="Carpeta del episodio"),
+    stats: Optional[Path] = typer.Option(
+        None, "--stats",
+        help="Fichero de medida de REAPER. Sin esto se busca el mas reciente en el temporal del sistema.",
+    ),
+    no_stats: bool = typer.Option(False, "--no-stats", help="Analizar sin la medida de REAPER (analisis parcial)"),
+    profile_path: Optional[Path] = typer.Option(None, "--profile", help="Perfil de serie (por defecto profiles/sh1984.toml)"),
+    open_report: bool = typer.Option(False, "--open", help="Abrir el informe HTML al terminar"),
+) -> None:
+    """Re-analiza el proyecto tal como lo has dejado tras sincronizar a mano.
+
+    Lee el .RPP editado (no `loudness.json`) y compara el nivel resultante
+    de cada item contra EN VOX, para señalar tramos concretos que revisar y
+    que hacer con cada uno.
+
+    Para el analisis completo, antes en REAPER: selecciona las pistas a
+    analizar y ejecuta la accion "Calculate loudness of selected tracks via
+    dry run render".
+    """
+    layout = EpisodeLayout(root=episode.expanduser().resolve())
+    profile = load_profile(profile_path)
+
+    stats_path = None
+    if not no_stats:
+        stats_path = stats.expanduser().resolve() if stats else newest_render_stats(stats_search_dirs(layout))
+        if stats_path is None:
+            console.print(
+                "[yellow]No encuentro ninguna medida de REAPER.[/yellow] Para el analisis completo, "
+                "en REAPER: selecciona las pistas a analizar y ejecuta la accion "
+                "'Calculate loudness of selected tracks via dry run render'. Sigo sin ella."
+            )
+        elif not stats_path.exists():
+            raise typer.BadParameter(f"no existe {stats_path}")
+
+    try:
+        report = verify_project(layout, profile, stats_path)
+    except VerifyError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    actions = build_actions(report)
+    console.print(f"\n[bold]Qué tengo que hacer — {layout.code}[/bold]")
+    if not actions:
+        console.print("[green]Nada. El castellano cuadra con el ingles en todo el episodio.[/green]")
+    for n, action in enumerate(actions, start=1):
+        colour = {"alta": "red", "media": "yellow"}.get(action.urgency, "cyan")
+        # highlight=False: rich colorea cada numero por su cuenta y estas
+        # lineas van llenas de timecodes y dB — queda ilegible.
+        console.print(f"\n[{colour}][bold]{n}. {action.title}[/bold][/{colour}]", highlight=False)
+        console.print(f"   {action.why}", highlight=False)
+        console.print(f"   [bold]Qué hacer:[/bold] {action.how}", highlight=False)
+        for spot in action.spots[:12]:
+            console.print(f"     · {spot}", highlight=False)
+        if len(action.spots) > 12:
+            console.print(
+                f"     · … y {len(action.spots) - 12} más, en el informe completo", highlight=False)
+
+    console.print(
+        f"\n[dim]Detalle — {report.item_count} items en «{report.es_track}», "
+        f"fuentes: {', '.join(report.sources) or '—'}, "
+        f"ganancia global {report.global_gain_db:+.2f} dB[/dim]"
+    )
+
+    if report.global_check:
+        g = report.global_check
+        table = Table(title="Global (post-FX)")
+        table.add_column("")
+        table.add_column(report.es_track, justify="right")
+        table.add_column(report.en_track, justify="right")
+        table.add_column("delta", justify="right")
+        table.add_row("LUFS-I", f"{g.es_lufs_i:.1f}", f"{g.en_lufs_i:.1f}", f"{g.delta_db:+.2f} dB")
+        table.add_row("LRA", f"{g.es_lra:.1f}", f"{g.en_lra:.1f}", f"{g.es_lra - g.en_lra:+.1f}")
+        table.add_row("Pico dBFS", f"{g.es_peak_dbfs:.1f}", f"{g.en_peak_dbfs:.1f}", f"{g.headroom_db:.1f} dB de margen")
+        table.add_row("Clips", str(g.es_clips), "—", "")
+        console.print(table)
+        if g.headroom_db < 1.0:
+            console.print(f"[red]Margen de pico: solo {g.headroom_db:.1f} dB.[/red]")
+
+    if report.envelope:
+        e = report.envelope
+        console.print(
+            f"Envolvente: sd {e.sd_with:.2f} dB con / {e.sd_without:.2f} dB sin "
+            f"({e.windows_out_with} vs {e.windows_out_without} ventanas fuera de {len(report.windows)}) — "
+            f"[bold]{e.verdict}[/bold]"
+        )
+
+    if report.fx_tax:
+        t = report.fx_tax
+        verb = "suman" if t.tax_db >= 0 else "restan"
+        console.print(f"Cadena de FX: {verb} {abs(t.tax_db):.2f} dB al pico (predicho {t.predicted_peak_dbfs:.2f} -> medido {t.measured_peak_dbfs:.2f} dBFS)")
+        if t.predicted_peak_dbfs > 0:
+            console.print("[red]El pico pre-FX predicho pasa de 0 dBFS: solo los FX evitan el recorte.[/red]")
+
+    flagged = report.flagged_items
+    if flagged:
+        table = Table(title=f"Items a revisar ({len(flagged)} de {len(report.comparable_items)} comparables)")
+        table.add_column("inicio")
+        table.add_column("dur", justify="right")
+        table.add_column("fuente")
+        table.add_column("env", justify="right")
+        table.add_column("delta", justify="right")
+        table.add_column("motivo")
+        for item in sorted(flagged, key=lambda i: -abs(i.delta_db))[:30]:
+            colour = "red" if item.status == STATUS_DOUBLE_GAIN else "yellow"
+            table.add_row(
+                format_timecode(item.start), f"{item.end - item.start:.2f}s", item.source,
+                f"{item.envelope_db:+.2f}", f"[{colour}]{item.delta_db:+.2f} dB[/{colour}]", item.status,
+            )
+        console.print(table)
+    else:
+        console.print("[green]Ningun item fuera de tolerancia.[/green]")
+
+    for window in report.flagged_windows:
+        console.print(
+            f"  ventana {format_timecode(window.start)}–{format_timecode(window.end)}: "
+            f"{window.delta_db:+.2f} dB"
+        )
+
+    for warning in report.warnings:
+        console.print(f"[yellow]aviso:[/yellow] {warning}")
+
+    json_path, html_path = write_report(layout, report)
+    console.print(f"[green]Informe:[/green] {html_path}  ([dim]{json_path}[/dim])")
+    if open_report:
+        import subprocess
+        subprocess.run(["open", str(html_path)], check=False)
+
+
+def stats_search_dirs(layout: EpisodeLayout) -> list[Path]:
+    """Donde buscar el render_stats.html. REAPER lo escribe en el temporal
+    del sistema ($TMPDIR en macOS), no junto al proyecto.
+    """
+    import tempfile
+    return [Path(tempfile.gettempdir()), Path("/tmp"), layout.project_dir, layout.finals]
 
 
 if __name__ == "__main__":

@@ -3,6 +3,13 @@
     Las aventuras de Sherlock Holmes (1984) S02E06 El problema final -
     [1080p AVC] [FLAC ENG SPA JPN] [Subs ENG JPN].mkv
 
+Todo lo que va delante del " - " lo pone el usuario tal cual (`--name`).
+Antes se componia aqui a partir de serie + codigo + titulo de episodio, y
+eso ataba el formato a "<serie> SxxExx <titulo>": no valia para una
+pelicula, ni para una serie con otra convencion, y obligaba a llevar el
+nombre de la serie en el perfil. Lo que si se compone aqui son los
+corchetes, que salen de lo detectado en el video y en las pistas.
+
 Separado de mux.py/remux4k.py porque lo usan los dos (el mux normal y el
 remux 4K generan cada uno su propio nombre, con su propia resolucion/codec
 de video y sus propios idiomas de subtitulos).
@@ -28,18 +35,19 @@ def codec_label(codec_name: str) -> str:
 
 
 def build_final_filename(
-    series_title: str,
-    code: str,
-    episode_title: str,
+    name: str,
     video_height: int,
     video_codec: str,
     audio_langs: list[str],
     sub_langs: list[str],
 ) -> str:
-    """`audio_langs`/`sub_langs` en el orden en que deben aparecer en el
+    """`name` es el nombre completo hasta el guion, sin interpolar nada:
+    "Las aventuras de Sherlock Holmes (1984) S02E06 El problema final".
+
+    `audio_langs`/`sub_langs` en el orden en que deben aparecer en el
     nombre (normalmente eng, spa, jpn) — ya filtrados a los presentes.
     """
-    parts = [f"{series_title} {code.upper()} {episode_title} -", f"[{video_height}p {codec_label(video_codec)}]"]
+    parts = [f"{name.strip()} -", f"[{video_height}p {codec_label(video_codec)}]"]
     if audio_langs:
         parts.append(f"[FLAC {' '.join(l.upper() for l in audio_langs)}]")
     if sub_langs:
