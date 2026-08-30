@@ -84,8 +84,12 @@
   </fieldset>
 
   <div class="runbar">
-    <label>titulo del episodio
-      <input type="text" id="episode_title" placeholder='p.ej. "El problema final"' style="width:14rem">
+    <label>nombre del fichero final
+      <input type="text" id="final_name"
+             placeholder='p.ej. "Las aventuras de Sherlock Holmes (1984) S02E06 El problema final"'
+             style="width:32rem">
+      <small style="display:block;color:#888">todo lo que va delante del guion; los corchetes
+        ([1080p AVC] [FLAC ...] [Subs ...]) se añaden solos. En blanco = se conserva el nombre del Blu-ray.</small>
     </label>
   </div>
   <div class="runbar">
@@ -138,7 +142,7 @@ async function openRunner(path) {
   document.getElementById('status').textContent = '';
   document.getElementById('cal-result').innerHTML = '';
   document.getElementById('cal-apply-btn').disabled = true;
-  document.getElementById('episode_title').value = '';
+  document.getElementById('final_name').value = '';
   refreshVerifyBox();
 
   calSteps = await (await fetch('/api/steps')).json();
@@ -300,7 +304,7 @@ document.getElementById('run-btn').addEventListener('click', async () => {
     to_step: document.getElementById('to_step').value,
     separator: document.getElementById('separator').value,
     force: document.getElementById('force').checked,
-    episode_title: document.getElementById('episode_title').value,
+    final_name: document.getElementById('final_name').value,
   };
   const res = await fetch('/api/run', {
     method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),

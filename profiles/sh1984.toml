@@ -19,11 +19,11 @@ ja = "jpn"
 es_track_name = "Audio reconstruido"
 # {code} se sustituye por el nombre de la carpeta del episodio (p.ej. s03e01).
 # El titulo real (numero de temporada/episodio/nombre) se pasa por CLI —
-# esto es solo el valor por defecto si no se da --title/--episode-title.
+# esto es solo el ultimo recurso si no se da ni --title ni --name y el
+# Blu-ray no trae titulo de contenedor.
 title_template = "Sherlock Holmes (1984) {code}"
-# Para el nombre del fichero final: "<series_title> <SxxExx> <episode_title>
-# - [<res>p <codec>] [FLAC <idiomas>] [Subs <idiomas>].mkv" — ver --episode-title.
-series_title = "Las aventuras de Sherlock Holmes (1984)"
+# El nombre del fichero final NO se compone aqui: se pasa entero por
+# --name, tal cual, y solo se le añaden los corchetes. Ver remaster/naming.py.
 
 [loudness]
 # Delta maximo que se permite aplicar entre ES VOX y EN VOX, global o por

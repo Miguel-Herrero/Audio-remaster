@@ -34,6 +34,17 @@ versionado con [SemVer](https://semver.org/lang/es/).
 ### Changed
 - `<ep>_render.RPP` pasa a **derivarse** de `<ep>.RPP` en el paso `render`,
   en vez de escribirse aparte en el paso `project`.
+- El nombre del fichero final se pasa entero, sin interpolar nada:
+  `--name "Las aventuras de Sherlock Holmes (1984) S02E06 El problema final"`.
+  Sustituye a `--episode-title` y `--series-title`, y deja sin uso la clave
+  `series_title` del perfil (eliminada). Antes se componía como
+  `<serie> <SxxExx> <título>`, lo que fijaba tanto el orden como la
+  presencia de las tres partes: no había forma de cambiar el nombre de la
+  serie sin tocar el TOML, ni de nombrar una película. Ahora `naming.py`
+  solo añade los corchetes (`[1080p AVC] [FLAC ...] [Subs ...]`), que sí
+  salen de lo detectado. Sin `--name` se sigue conservando el nombre del
+  Blu-ray tal cual; el título interno del MKV, si no se da `--title`,
+  pasa a ser el propio `--name`.
 
 ### Fixed
 - El paso `project` ya no puede sobrescribir un `<ep>.RPP` editado a mano.

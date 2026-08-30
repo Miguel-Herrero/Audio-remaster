@@ -33,7 +33,6 @@ class Languages:
 class MuxConfig:
     es_track_name: str
     title_template: str  # p.ej. "Sherlock Holmes (1984) {code}"
-    series_title: str  # para el nombre de fichero final, ver remaster/naming.py
 
 
 @dataclass(frozen=True)

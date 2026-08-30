@@ -138,8 +138,8 @@ def api_run(payload: dict) -> JSONResponse:
     ]
     if payload.get("force"):
         args.append("--force")
-    if payload.get("episode_title"):
-        args += ["--episode-title", payload["episode_title"]]
+    if payload.get("final_name"):
+        args += ["--name", payload["final_name"]]
 
     return _start_job(episode, ["run", episode, *args])
 

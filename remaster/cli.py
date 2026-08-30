@@ -176,13 +176,13 @@ def run(
     separator: str = typer.Option("local", help="Backend de separacion: local | mvsep"),
     mvsep_token: Optional[str] = typer.Option(None, help="Token de MVSEP (mejor usar MVSEP_API_TOKEN)"),
     model_dir: Path = typer.Option(DEFAULT_MODEL_DIR, help="Directorio de pesos del separador local"),
-    title: Optional[str] = typer.Option(None, help="Titulo (metadato interno del MKV); por defecto se deriva de --episode-title o del Blu-ray"),
-    episode_title: Optional[str] = typer.Option(
-        None, "--episode-title",
-        help='Titulo del episodio (p.ej. "El problema final"). Si se da, el fichero final se nombra '
-             '"<serie> <SxxExx> <titulo> - [<res>p <codec>] [FLAC ...] [Subs ...].mkv"; si no, se usa el nombre del Blu-ray tal cual.',
+    title: Optional[str] = typer.Option(None, help="Titulo (metadato interno del MKV); por defecto, el de --name o el del Blu-ray"),
+    final_name: Optional[str] = typer.Option(
+        None, "--name",
+        help='Nombre completo del fichero final hasta el guion, tal cual y sin interpolar nada '
+             '(p.ej. "Las aventuras de Sherlock Holmes (1984) S02E06 El problema final"). Queda '
+             '"<name> - [<res>p <codec>] [FLAC ...] [Subs ...].mkv". Sin esto se usa el nombre del Blu-ray tal cual.',
     ),
-    series_title: Optional[str] = typer.Option(None, "--series-title", help="Sobrescribe el titulo de serie del perfil para el nombre de fichero"),
     out_dir: Optional[Path] = typer.Option(None, "--out-dir", help="Carpeta de salida del MKV final (por defecto, la raiz del episodio)"),
     es_source: Optional[Path] = typer.Option(None, help="Forzar fichero fuente del DVD castellano"),
     es_track: Optional[int] = typer.Option(None, help="Forzar indice de stream del audio castellano"),
@@ -402,13 +402,12 @@ def run(
 
     # --- mux ---
     out_dir_resolved = (out_dir or layout.root).expanduser().resolve()
-    resolved_series_title = series_title or profile.mux.series_title
     audio_langs = ["eng", "spa"] + (["jpn"] if classified.ja else [])
 
-    if episode_title:
+    if final_name:
         sub_langs = subtitle_languages(classified.bluray_container, mkvmerge_path)
         output_filename = build_final_filename(
-            resolved_series_title, layout.code, episode_title,
+            final_name,
             classified.bluray_video.height, classified.bluray_video.codec_name,
             audio_langs, sub_langs,
         )
@@ -420,8 +419,8 @@ def run(
         console.print("\n[bold]mux[/bold]")
         mux_title = title
         if mux_title is None:
-            if episode_title:
-                mux_title = f"{resolved_series_title} {layout.code.upper()}: {episode_title}"
+            if final_name:
+                mux_title = final_name
             else:
                 from .steps.remux4k import container_title
                 mux_title = container_title(classified.bluray_container, mkvmerge_path) or profile.mux.title_template.format(code=layout.code)
@@ -447,9 +446,9 @@ def run(
         return
 
     console.print("\n[bold]remux4k[/bold]")
-    if episode_title:
+    if final_name:
         output_4k = out_dir_resolved / build_final_filename(
-            resolved_series_title, layout.code, episode_title,
+            final_name,
             classified.remaster4k.video.height, classified.remaster4k.video.codec_name,
             audio_langs, ["eng"],
         )
