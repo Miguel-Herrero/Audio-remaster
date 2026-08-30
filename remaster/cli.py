@@ -27,7 +27,7 @@ from .steps.align import CalibrationPoint, CalibrationResult, calibrate_from_poi
 from .steps.extract import extract_all
 from .steps.loudness import loudness_step
 from .steps.mux import mux_step, subtitle_languages
-from .steps.project import build_project_step
+from .steps.project import ProjectEditedError, build_project_step
 from .steps.remux4k import remux4k_step
 from .steps.render import REAPER_BINARY, render_step
 from .steps.retime import retime_step
@@ -362,11 +362,15 @@ def run(
     # --- project ---
     if runs("project"):
         console.print("\n[bold]project[/bold]")
-        project_result = build_project_step(
-            classified, layout, profile,
-            en_vocals, en_instrumental, es_vocals, es_instrumental,
-            align_result, loudness_result, manifest, force=force,
-        )
+        try:
+            project_result = build_project_step(
+                classified, layout, profile,
+                en_vocals, en_instrumental, es_vocals, es_instrumental,
+                align_result, loudness_result, manifest, force=force,
+            )
+        except ProjectEditedError as exc:
+            console.print(f"\n[red]{exc}[/red]")
+            raise typer.Exit(1) from exc
         _report_step(layout.rpp_edit.name, project_result)
         from .steps.project import MIN_TOTAL_DRIFT_TO_SEGMENT_S
         total_drift = abs(align_result.drift_slope) * probe_file(en_vocals).duration
@@ -376,7 +380,7 @@ def run(
                 f"~{total_drift:.2f}s acumulados en todo el episodio"
             )
     else:
-        _expect(layout.rpp_render, "project")
+        _expect(layout.rpp_edit, "project")
 
     if hi == STEP_ORDER.index("project"):
         console.print("\n[green]Listo.[/green]")
@@ -386,7 +390,8 @@ def run(
     if runs("render"):
         console.print("\n[bold]render[/bold]")
         expected_duration = probe_file(en_vocals).duration
-        render_result = render_step(layout, expected_duration, manifest, reaper_binary=reaper_binary, force=force)
+        render_result = render_step(
+            layout, expected_duration, manifest, profile, reaper_binary=reaper_binary, force=force)
         _report_step(layout.es_reconstructed.name, render_result)
     else:
         _expect(layout.es_reconstructed, "render")
