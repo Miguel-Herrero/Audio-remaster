@@ -32,6 +32,11 @@ def clamp_db(value_db: float, max_abs_db: float) -> float:
 def measure_peak_dbfs(samples: np.ndarray) -> float:
     """Pico de muestra (no true-peak) en dBFS. -inf si la señal es
     silencio total (sin pico que proteger).
+
+    OJO: si le pasas un downmix a mono, mide el pico DEL MONO, que puede
+    estar hasta 6 dB por debajo del pico real de la señal estereo. Para
+    proteger de recorte usa `max_safe_gain_db_from_peaks` con los picos
+    que da `audio/envelope.py:load_mono_and_peak_frames`.
     """
     peak = float(np.max(np.abs(samples))) if len(samples) else 0.0
     if peak <= 0:
@@ -49,3 +54,15 @@ def max_safe_gain_db(samples: np.ndarray, ceiling_dbfs: float) -> float:
     if not np.isfinite(peak_db):
         return float("inf")
     return ceiling_dbfs - peak_db
+
+
+def max_safe_gain_db_from_peaks(peaks: np.ndarray, ceiling_dbfs: float) -> float:
+    """Igual que `max_safe_gain_db` pero partiendo de picos ya medidos por
+    frame (y sobre todos los canales, no sobre el mono). Es la version
+    que debe usar la proteccion de pico: ver el docstring de
+    `audio/envelope.py:load_mono_and_peak_frames`.
+    """
+    peak = float(np.max(peaks)) if len(peaks) else 0.0
+    if peak <= 0:
+        return float("inf")
+    return ceiling_dbfs - 20 * np.log10(peak)

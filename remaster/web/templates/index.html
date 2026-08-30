@@ -35,7 +35,7 @@
 <h1>remaster — episodios</h1>
 <p class="steps">Carpeta base: <code id="root"></code> (variable de entorno REMASTER_MOVIES_DIR)</p>
 <table id="episodes"><thead>
-  <tr><th>Episodio</th><th>Pasos hechos</th><th>Sync</th><th>MKV final</th><th></th></tr>
+  <tr><th>Episodio</th><th>Pasos hechos</th><th>Sync</th><th>Analisis</th><th>MKV final</th><th></th></tr>
 </thead><tbody></tbody></table>
 
 <div id="runner" style="display:none">
@@ -61,6 +61,24 @@
     </div>
     <div id="cal-result"></div>
   </details>
+
+  <fieldset id="verify-box">
+    <legend>Re-analizar tras sincronizar a mano</legend>
+    <p class="hint">
+      Compara el proyecto tal como lo has dejado (el .RPP, con sus cortes y sus
+      rellenos de otras pistas) contra EN VOX, y saca los tramos concretos que revisar.
+      Para el analisis completo hace falta la medida post-FX, que solo la da REAPER:
+      abre el proyecto, <b>Render</b>, marca <b>«Dry run (no output file)»</b> y
+      <b>«Loudness/peak analysis»</b>, renderiza, y vuelve aqui. Sin eso se analiza
+      solo el .RPP y faltan el LUFS-I global, el pico real y el veredicto de la envolvente.
+    </p>
+    <p class="hint" id="verify-stats-state">—</p>
+    <div class="runbar">
+      <button id="verify-btn">Re-analizar</button>
+      <label><input type="checkbox" id="verify-no-stats"> solo el .RPP</label>
+      <a id="verify-report-link" href="#" target="_blank" style="display:none">ver ultimo informe</a>
+    </div>
+  </fieldset>
 
   <div class="runbar">
     <label>titulo del episodio
@@ -95,6 +113,7 @@ async function loadEpisodes() {
       <td><a href="#" data-path="${ep.path}">${ep.code}</a></td>
       <td class="steps">${ep.steps_done.join(', ') || '—'}</td>
       <td>${ep.has_align_png ? `<a href="/api/episodes/${ep.code}/align.png" target="_blank">ver</a>` : '—'}</td>
+      <td>${ep.has_verify ? `<a href="/api/episodes/${ep.code}/verify.html" target="_blank">ver</a>` : '—'}</td>
       <td>${ep.has_final_mkv ? 'si' : '—'}</td>
       <td><a href="#" data-path="${ep.path}" class="open">abrir</a></td>
     `;
@@ -117,6 +136,7 @@ async function openRunner(path) {
   document.getElementById('cal-result').innerHTML = '';
   document.getElementById('cal-apply-btn').disabled = true;
   document.getElementById('episode_title').value = '';
+  refreshVerifyBox();
 
   calSteps = await (await fetch('/api/steps')).json();
   for (const sel of [document.getElementById('from_step'), document.getElementById('to_step')]) {
@@ -217,6 +237,58 @@ async function submitCalibration(apply) {
 document.getElementById('cal-compute-btn').addEventListener('click', () => submitCalibration(false));
 document.getElementById('cal-apply-btn').addEventListener('click', () => submitCalibration(true));
 
+function currentCode() {
+  return currentEpisode ? currentEpisode.split('/').filter(Boolean).pop() : null;
+}
+
+async function refreshVerifyBox() {
+  const code = currentCode();
+  const state = document.getElementById('verify-stats-state');
+  const link = document.getElementById('verify-report-link');
+  link.style.display = 'none';
+  if (!code) { state.textContent = '—'; return; }
+
+  const episodes = await (await fetch('/api/episodes')).json();
+  const ep = episodes.find(e => e.code === code);
+  if (ep && ep.has_verify) {
+    link.href = `/api/episodes/${code}/verify.html`;
+    link.style.display = 'inline';
+  }
+
+  const info = await (await fetch(`/api/episodes/${code}/render-stats`)).json();
+  if (!info.found) {
+    state.innerHTML = '<span class="status-error">No encuentro ningun render_stats.html.</span> '
+      + 'Haz el dry run en REAPER, o marca «solo el .RPP» para un analisis parcial.';
+  } else {
+    const stale = info.age_minutes > 120;
+    state.innerHTML = `render_stats.html de ${info.modified} (hace ${info.age_minutes} min)`
+      + (stale ? ' — <span class="status-error">es viejo: si has tocado el proyecto despues, rehaz el dry run.</span>' : '')
+      + `<br><code>${info.path}</code>`;
+  }
+}
+
+function startJob(jobId) {
+  document.getElementById('log').style.display = 'block';
+  document.getElementById('log').textContent = '';
+  document.getElementById('status').textContent = 'ejecutando...';
+  document.getElementById('status').className = 'status-running';
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(() => pollJob(jobId), 1500);
+}
+
+document.getElementById('verify-btn').addEventListener('click', async () => {
+  if (!currentEpisode) return;
+  const res = await fetch('/api/verify', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      episode: currentEpisode,
+      no_stats: document.getElementById('verify-no-stats').checked,
+    }),
+  });
+  const { job_id } = await res.json();
+  startJob(job_id);
+});
+
 document.getElementById('run-btn').addEventListener('click', async () => {
   if (!currentEpisode) return;
   const body = {
@@ -231,12 +303,7 @@ document.getElementById('run-btn').addEventListener('click', async () => {
     method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
   });
   const { job_id } = await res.json();
-  document.getElementById('log').style.display = 'block';
-  document.getElementById('log').textContent = '';
-  document.getElementById('status').textContent = 'ejecutando...';
-  document.getElementById('status').className = 'status-running';
-  if (pollTimer) clearInterval(pollTimer);
-  pollTimer = setInterval(() => pollJob(job_id), 1500);
+  startJob(job_id);
 });
 
 async function pollJob(jobId) {
@@ -253,6 +320,7 @@ async function pollJob(jobId) {
     status.className = data.status === 'done' ? 'status-done' : 'status-error';
     clearInterval(pollTimer);
     loadEpisodes();
+    refreshVerifyBox();
   }
 }
 

@@ -22,13 +22,31 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-from remaster.audio.lufs import clamp_db, max_safe_gain_db, measure_lufs, measure_peak_dbfs
+from remaster.audio.envelope import load_mono_and_peak_frames, peak_frames
+from remaster.audio.lufs import (
+    clamp_db,
+    max_safe_gain_db,
+    max_safe_gain_db_from_peaks,
+    measure_lufs,
+    measure_peak_dbfs,
+)
 from remaster.steps.align import AlignResult
-from remaster.steps.loudness import PEAK_CEILING_DBFS, _scene_relative_gain_db, compute_loudness
+from remaster.steps.loudness import (
+    PEAK_CEILING_DBFS,
+    PEAK_FRAME_MS,
+    _scene_relative_gain_db,
+    compute_loudness,
+)
 from remaster.profile import LoudnessConfig
 
 SR = 48000
 NO_SHIFT = AlignResult(offset_seconds=0.0, drift_slope=0.0, confidence=1.0, low_confidence=False)
+FRAME_LEN = int(SR * PEAK_FRAME_MS / 1000)
+FRAME_RATE = SR / FRAME_LEN
+
+
+def _peaks(samples):
+    return peak_frames(samples, FRAME_LEN)
 
 
 def _clipping_scenario():
@@ -110,8 +128,11 @@ def test_scene_gain_uses_the_shifted_slice_not_the_raw_one():
     shifted = AlignResult(offset_seconds=5.0, drift_slope=0.0, confidence=1.0, low_confidence=False)
     global_gain_db = 0.0  # aislar el efecto de la escena
 
-    rel_gain_shifted = _scene_relative_gain_db(es, en, SR, 0.0, 4.0, 6.0, global_gain_db, shifted)
-    rel_gain_unshifted = _scene_relative_gain_db(es, en, SR, 0.0, 4.0, 6.0, global_gain_db, NO_SHIFT)
+    peaks = _peaks(es)
+    rel_gain_shifted = _scene_relative_gain_db(
+        es, en, SR, 0.0, 4.0, 6.0, global_gain_db, shifted, peaks, FRAME_RATE, PEAK_CEILING_DBFS)
+    rel_gain_unshifted = _scene_relative_gain_db(
+        es, en, SR, 0.0, 4.0, 6.0, global_gain_db, NO_SHIFT, peaks, FRAME_RATE, PEAK_CEILING_DBFS)
 
     # Con el offset aplicado (correcto): mide el tramo a 0.95 -> casi sin
     # margen -> la ganancia permitida es pequeña o negativa.

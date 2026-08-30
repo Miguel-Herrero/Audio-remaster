@@ -34,6 +34,17 @@ max_delta_db = 6.0
 # silencio a efectos de deteccion de cortes de escena.
 scene_min_silence_db = -35.0
 scene_min_duration_s = 1.5
+# Techo de pico sobre la señal CRUDA de ES VOX, antes de ReaEQ/ReaFir.
+# Cuanto sube o baja esa cadena el pico lo mide `remaster verify` sobre un
+# render de verdad ("impuesto de la cadena de FX"): para que el render
+# aterrice en un pico objetivo P, este valor es P menos ese impuesto.
+peak_ceiling_dbfs = -6.0
+# Umbrales de `remaster verify`. El de ventana (2 min de dialogo agregado)
+# puede ser estrecho; el de item suelto no, porque comparar 2 s de doblaje
+# con el ingles del mismo instante mide sobre todo que el fraseo no
+# coincide — ver el comentario en remaster/profile.py.
+verify_tolerance_db = 2.0
+verify_item_tolerance_db = 6.0
 
 [reaeq]
 # Capturado de ~/Library/Application Support/REAPER/presets/vst-reaeq.ini,

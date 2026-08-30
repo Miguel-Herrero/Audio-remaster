@@ -3,6 +3,37 @@
 Formato basado en [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versionado con [SemVer](https://semver.org/lang/es/).
 
+## [2.1.0] - 2026-08-30
+
+### Added
+- `remaster verify <episodio>`: re-analiza el proyecto TAL COMO queda tras
+  editarlo a mano en REAPER. Lee el `.RPP` (no `loudness.json`) y compara el
+  nivel resultante de cada item contra EN VOX, en vez de comprobar de qué
+  fichero sale cada uno — rellenar huecos con otra fuente es parte del
+  flujo, no un fallo. Detecta el caso en que un trozo del inglés puesto en
+  su sitio recibe encima la envolvente de compensación del castellano
+  ("ganancia doble"). Con el `render_stats.html` de un dry run añade la
+  medida post-FX: LUFS-I global, pico real, deriva por ventanas de 2 min,
+  puntos sueltos más desviados, y un A/B que dice si la envolvente sigue
+  ayudando tras re-sincronizar.
+- Informe en `.remaster/verify.json` y `.remaster/verify.html`.
+- Botón «Re-analizar tras sincronizar a mano» en la UI web, con el estado
+  del `render_stats.html` detectado y las instrucciones del dry run.
+- Lector de `.RPP` (`remaster/reaper/rpp_read.py`) y de `render_stats.html`
+  de REAPER (`remaster/reaper/render_stats.py`).
+- Claves de perfil `[loudness] peak_ceiling_dbfs`, `verify_tolerance_db` y
+  `verify_item_tolerance_db`.
+
+### Fixed
+- La protección de pico medía el pico sobre el downmix a mono, que esconde
+  hasta 6 dB de un transitorio presente en un solo canal. Medido en
+  `es_vocals.flac` de s03e01: pico real -2.6 dBFS, pico del mono -5.2 dBFS.
+  Ese error de 2.6 dB llegaba entero a la ganancia global — que es justo la
+  que debía impedir el recorte — y dejaba el render con 0.8 dB de margen
+  donde el código creía tener 6. Ahora el pico se mide por frames sobre
+  todos los canales (`load_mono_and_peak_frames`), tanto en la ganancia
+  global como en la protección por escena.
+
 ## [2.0.0] - 2026-08-29
 
 ### Added

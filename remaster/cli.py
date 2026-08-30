@@ -21,6 +21,7 @@ from .naming import build_final_filename
 from .notes import write_notes
 from .probe import probe_file
 from .profile import Profile, load_profile
+from .reaper.render_stats import newest_render_stats
 from .sources import ClassifiedSources, SourceOverrides, SourcesError, classify_sources
 from .steps.align import CalibrationPoint, CalibrationResult, calibrate_from_points, manual_align, run_align
 from .steps.extract import extract_all
@@ -30,6 +31,7 @@ from .steps.project import build_project_step
 from .steps.remux4k import remux4k_step
 from .steps.render import REAPER_BINARY, render_step
 from .steps.retime import retime_step
+from .steps.verify import STATUS_DOUBLE_GAIN, VerifyError, format_timecode, verify_project, write_report
 from .steps.separate import LocalSeparatorBackend, MvsepSeparatorBackend, SeparatorBackend, separate_all
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
@@ -580,6 +582,124 @@ def notes(episode: Path = typer.Argument(..., help="Carpeta del episodio")) -> N
         raise typer.Exit(1)
     path = write_notes(layout, manifest)
     console.print(f"[green]Escrito:[/green] {path}")
+
+
+@app.command()
+def verify(
+    episode: Path = typer.Argument(..., help="Carpeta del episodio"),
+    stats: Optional[Path] = typer.Option(
+        None, "--stats",
+        help="render_stats.html de un dry run de REAPER. Sin esto se busca el mas reciente en el temporal del sistema.",
+    ),
+    no_stats: bool = typer.Option(False, "--no-stats", help="Analizar solo el .RPP, sin medida post-FX"),
+    profile_path: Optional[Path] = typer.Option(None, "--profile", help="Perfil de serie (por defecto profiles/sh1984.toml)"),
+    open_report: bool = typer.Option(False, "--open", help="Abrir el informe HTML al terminar"),
+) -> None:
+    """Re-analiza el proyecto tal como lo has dejado tras sincronizar a mano.
+
+    Lee el .RPP editado (no `loudness.json`) y compara el nivel resultante
+    de cada item contra EN VOX, para señalar tramos concretos que revisar.
+    Con el `render_stats.html` de un dry run añade la medida post-FX:
+    LUFS-I global, pico real y veredicto sobre la envolvente.
+    """
+    layout = EpisodeLayout(root=episode.expanduser().resolve())
+    profile = load_profile(profile_path)
+
+    stats_path = None
+    if not no_stats:
+        stats_path = stats.expanduser().resolve() if stats else newest_render_stats(stats_search_dirs(layout))
+        if stats_path is None:
+            console.print(
+                "[yellow]Sin render_stats.html.[/yellow] Para el analisis completo, en REAPER: "
+                "Render, marca 'Dry run (no output file)' y 'Loudness/peak analysis', y renderiza. "
+                "Sigo solo con el .RPP."
+            )
+        elif not stats_path.exists():
+            raise typer.BadParameter(f"no existe {stats_path}")
+
+    try:
+        report = verify_project(layout, profile, stats_path)
+    except VerifyError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    console.print(
+        f"[bold]{layout.code}[/bold] — {report.item_count} items en «{report.es_track}», "
+        f"fuentes: {', '.join(report.sources) or '—'}, "
+        f"ganancia global {report.global_gain_db:+.2f} dB"
+    )
+
+    if report.global_check:
+        g = report.global_check
+        table = Table(title="Global (post-FX)")
+        table.add_column("")
+        table.add_column(report.es_track, justify="right")
+        table.add_column(report.en_track, justify="right")
+        table.add_column("delta", justify="right")
+        table.add_row("LUFS-I", f"{g.es_lufs_i:.1f}", f"{g.en_lufs_i:.1f}", f"{g.delta_db:+.2f} dB")
+        table.add_row("LRA", f"{g.es_lra:.1f}", f"{g.en_lra:.1f}", f"{g.es_lra - g.en_lra:+.1f}")
+        table.add_row("Pico dBFS", f"{g.es_peak_dbfs:.1f}", f"{g.en_peak_dbfs:.1f}", f"{g.headroom_db:.1f} dB de margen")
+        table.add_row("Clips", str(g.es_clips), "—", "")
+        console.print(table)
+        if g.headroom_db < 1.0:
+            console.print(f"[red]Margen de pico: solo {g.headroom_db:.1f} dB.[/red]")
+
+    if report.envelope:
+        e = report.envelope
+        console.print(
+            f"Envolvente: sd {e.sd_with:.2f} dB con / {e.sd_without:.2f} dB sin "
+            f"({e.windows_out_with} vs {e.windows_out_without} ventanas fuera de {len(report.windows)}) — "
+            f"[bold]{e.verdict}[/bold]"
+        )
+
+    if report.fx_tax:
+        t = report.fx_tax
+        verb = "suman" if t.tax_db >= 0 else "restan"
+        console.print(f"Cadena de FX: {verb} {abs(t.tax_db):.2f} dB al pico (predicho {t.predicted_peak_dbfs:.2f} -> medido {t.measured_peak_dbfs:.2f} dBFS)")
+        if t.predicted_peak_dbfs > 0:
+            console.print("[red]El pico pre-FX predicho pasa de 0 dBFS: solo los FX evitan el recorte.[/red]")
+
+    flagged = report.flagged_items
+    if flagged:
+        table = Table(title=f"Items a revisar ({len(flagged)} de {len(report.comparable_items)} comparables)")
+        table.add_column("inicio")
+        table.add_column("dur", justify="right")
+        table.add_column("fuente")
+        table.add_column("env", justify="right")
+        table.add_column("delta", justify="right")
+        table.add_column("motivo")
+        for item in sorted(flagged, key=lambda i: -abs(i.delta_db))[:30]:
+            colour = "red" if item.status == STATUS_DOUBLE_GAIN else "yellow"
+            table.add_row(
+                format_timecode(item.start), f"{item.end - item.start:.2f}s", item.source,
+                f"{item.envelope_db:+.2f}", f"[{colour}]{item.delta_db:+.2f} dB[/{colour}]", item.status,
+            )
+        console.print(table)
+    else:
+        console.print("[green]Ningun item fuera de tolerancia.[/green]")
+
+    for window in report.flagged_windows:
+        console.print(
+            f"  ventana {format_timecode(window.start)}–{format_timecode(window.end)}: "
+            f"{window.delta_db:+.2f} dB"
+        )
+
+    for warning in report.warnings:
+        console.print(f"[yellow]aviso:[/yellow] {warning}")
+
+    json_path, html_path = write_report(layout, report)
+    console.print(f"[green]Informe:[/green] {html_path}  ([dim]{json_path}[/dim])")
+    if open_report:
+        import subprocess
+        subprocess.run(["open", str(html_path)], check=False)
+
+
+def stats_search_dirs(layout: EpisodeLayout) -> list[Path]:
+    """Donde buscar el render_stats.html. REAPER lo escribe en el temporal
+    del sistema ($TMPDIR en macOS), no junto al proyecto.
+    """
+    import tempfile
+    return [Path(tempfile.gettempdir()), Path("/tmp"), layout.project_dir, layout.finals]
 
 
 if __name__ == "__main__":

@@ -16,7 +16,9 @@ import os
 import subprocess
 import sys
 import threading
+import time
 import uuid
+from datetime import datetime
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -24,9 +26,10 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
-from ..cli import STEP_ORDER, run_calibration
+from ..cli import STEP_ORDER, stats_search_dirs, run_calibration
 from ..layout import EpisodeLayout
 from ..manifest import Manifest
+from ..reaper.render_stats import newest_render_stats
 
 app = FastAPI(title="remaster")
 
@@ -37,7 +40,7 @@ _TEMPLATE_PATH = Path(__file__).parent / "templates" / "index.html"
 class Job:
     id: str
     episode: str
-    args: list[str]
+    command: list[str]  # argv completo tras `-m remaster.cli`, p.ej. ["run", "<ep>", "--from", ...]
     status: str = "running"  # running | done | error
     log: list[str] = field(default_factory=list)
     process: Optional[subprocess.Popen] = None
@@ -49,6 +52,25 @@ _jobs_lock = threading.Lock()
 
 def _movies_dir() -> Path:
     return Path(os.environ.get("REMASTER_MOVIES_DIR", str(Path.home() / "Movies"))).expanduser()
+
+
+def _render_stats_info(layout: EpisodeLayout) -> dict:
+    """Que sabemos del render_stats.html que REAPER deja en el temporal.
+
+    La UI lo enseña porque el dry run es manual: sin el, el re-analisis
+    pierde el LUFS-I global, el pico real y el veredicto de la envolvente,
+    y conviene ver de cuando es antes de fiarse.
+    """
+    path = newest_render_stats(stats_search_dirs(layout))
+    if path is None:
+        return {"found": False}
+    mtime = path.stat().st_mtime
+    return {
+        "found": True,
+        "path": str(path),
+        "age_minutes": round((time.time() - mtime) / 60),
+        "modified": datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M"),
+    }
 
 
 def _list_episodes() -> list[dict]:
@@ -67,13 +89,15 @@ def _list_episodes() -> list[dict]:
             "steps_done": sorted(manifest.data.keys()),
             "has_align_png": layout.align_png_path.exists(),
             "has_final_mkv": any(child.glob("*.mkv")) if child.exists() else False,
+            "has_rpp": layout.rpp_edit.exists(),
+            "has_verify": (layout.state_dir / "verify.html").exists(),
         })
     return episodes
 
 
 def _run_job(job: Job) -> None:
     proc = subprocess.Popen(
-        [sys.executable, "-m", "remaster.cli", "run", job.episode, *job.args],
+        [sys.executable, "-m", "remaster.cli", *job.command],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
     )
     job.process = proc
@@ -117,12 +141,45 @@ def api_run(payload: dict) -> JSONResponse:
     if payload.get("episode_title"):
         args += ["--episode-title", payload["episode_title"]]
 
+    return _start_job(episode, ["run", episode, *args])
+
+
+def _start_job(episode: str, command: list[str]) -> JSONResponse:
     job_id = uuid.uuid4().hex[:12]
-    job = Job(id=job_id, episode=episode, args=args)
+    job = Job(id=job_id, episode=episode, command=command)
     with _jobs_lock:
         _jobs[job_id] = job
     threading.Thread(target=_run_job, args=(job,), daemon=True).start()
     return JSONResponse({"job_id": job_id})
+
+
+@app.get("/api/episodes/{code}/render-stats")
+def api_render_stats(code: str) -> JSONResponse:
+    return JSONResponse(_render_stats_info(EpisodeLayout(root=_movies_dir() / code)))
+
+
+@app.post("/api/verify")
+def api_verify(payload: dict) -> JSONResponse:
+    """Re-analisis del proyecto ya editado a mano. Igual que el resto de la
+    UI, lanza la misma CLI (`remaster verify`) en vez de reimplementarla.
+    """
+    episode = payload.get("episode")
+    if not episode:
+        raise HTTPException(400, "falta 'episode'")
+    command = ["verify", episode]
+    if payload.get("no_stats"):
+        command.append("--no-stats")
+    elif payload.get("stats_path"):
+        command += ["--stats", payload["stats_path"]]
+    return _start_job(episode, command)
+
+
+@app.get("/api/episodes/{code}/verify.html")
+def api_verify_report(code: str) -> FileResponse:
+    path = EpisodeLayout(root=_movies_dir() / code).state_dir / "verify.html"
+    if not path.exists():
+        raise HTTPException(404, "todavia no hay informe: lanza el re-analisis")
+    return FileResponse(path, media_type="text/html")
 
 
 @app.get("/api/jobs/{job_id}")
