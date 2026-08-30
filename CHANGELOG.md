@@ -3,7 +3,7 @@
 Formato basado en [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versionado con [SemVer](https://semver.org/lang/es/).
 
-## [No publicado]
+## [2.2.0] - 2026-08-31
 
 ### Added
 - La UI web se rehace entera. La anterior era un andamio: una tabla, dos
@@ -50,9 +50,22 @@ versionado con [SemVer](https://semver.org/lang/es/).
 - `remaster/steps_meta.py`: que hace cada paso y que protege, en una linea.
   Fuente unica — `STEP_ORDER` se deriva de ahi, asi que no se puede añadir un
   paso sin explicarlo. Se sirve por `GET /api/steps`.
+- Los episodios pasan de filas de tabla a tarjetas con anillo de progreso y
+  distintivos de lo que hay hecho («editado a mano», informe, MKV). Los mismos
+  distintivos, con enlaces al informe y al grafico de sync, encabezan el
+  episodio abierto.
+- El rango que se propone al abrir un episodio es «lo que falta»; si no falta
+  nada, `verify` a secas, que es el bucle de trabajo real (editar en REAPER ⇄
+  revisar). Antes se seleccionaban los once pasos y se abrian los cuatro
+  paneles a la vez, que es el amontonamiento del que se venia.
 - Tema claro/oscuro con interruptor (oscuro por defecto), enlace directo a un
   episodio por `#codigo`, atajos de teclado, avisos al terminar y textos
   utiles cuando no hay nada que enseñar.
+- `tests/test_ui_contract.py`: aqui no hay tests de JS, pero los puntos donde
+  el HTML y el paquete acuerdan un vocabulario si se comprueban leyendo el
+  fichero, y son justo donde las cosas se rompen sin fallar. Todo `outcome`
+  que emita la traza tiene que tener estado visual, y todo estado visual su
+  glifo y su regla CSS.
 
 ### Changed
 - **`verify` pasa a ser un paso mas**, entre `project` y `render`, que es
