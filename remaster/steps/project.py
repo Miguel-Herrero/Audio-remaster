@@ -242,20 +242,34 @@ def build_tracks(
 
 
 
-def _guard_hand_edits(layout: EpisodeLayout, manifest: Manifest, force: bool) -> None:
-    """Aborta si el `<ep>.RPP` de disco no es el que dejo este paso.
+def project_hand_edited(layout: EpisodeLayout, manifest: Manifest) -> bool:
+    """True si el `<ep>.RPP` de disco no es el que dejo este paso.
 
     El manifiesto ya guarda el hash de cada salida, asi que la
-    comprobacion es exacta: distinto hash = lo has editado. Sin esto, un
-    cambio en cualquier parametro del paso (por ejemplo la ganancia
-    global, que cambia sola al recalcular loudness) basta para que el
-    paso se considere desactualizado y reescriba el proyecto encima de
-    todo el trabajo manual.
+    comprobacion es exacta: distinto hash = lo has editado.
+
+    Es un predicado suelto, y no logica escondida dentro del guardian,
+    porque la UI lo necesita para poder AVISARTE antes de que pulses
+    «Ejecutar» — enterarse de que el paso iba a machacar tu trabajo por
+    el error que salta al intentarlo llega tarde.
     """
     if not layout.rpp_edit.exists():
-        return
+        return False
     recorded = (manifest.get("project") or {}).get("outputs", {}).get(str(layout.rpp_edit))
-    if recorded is None or sha256_file(layout.rpp_edit) == recorded:
+    if recorded is None:
+        return False
+    return sha256_file(layout.rpp_edit) != recorded
+
+
+def _guard_hand_edits(layout: EpisodeLayout, manifest: Manifest, force: bool) -> None:
+    """Aborta si el proyecto esta editado a mano.
+
+    Sin esto, un cambio en cualquier parametro del paso (por ejemplo la
+    ganancia global, que cambia sola al recalcular loudness) basta para
+    que el paso se considere desactualizado y reescriba el proyecto
+    encima de todo el trabajo manual.
+    """
+    if not project_hand_edited(layout, manifest):
         return
     if not force:
         raise ProjectEditedError(

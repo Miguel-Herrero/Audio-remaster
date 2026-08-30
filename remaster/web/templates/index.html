@@ -1,338 +1,887 @@
 <!doctype html>
-<html lang="es">
+<html lang="es" data-theme="dark">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>remaster</title>
 <style>
-  :root { color-scheme: light dark; }
-  body { font-family: -apple-system, system-ui, sans-serif; max-width: 980px; margin: 2rem auto; padding: 0 1rem; }
-  h1 { font-size: 1.3rem; }
-  table { width: 100%; border-collapse: collapse; margin-bottom: 1.5rem; }
-  th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid #8883; }
-  .steps { font-size: 0.8rem; color: #888; }
-  select, button, input[type=text] { padding: 0.3rem 0.5rem; }
-  #log { background: #1113; border-radius: 6px; padding: 0.8rem; height: 320px; overflow-y: auto;
-         font-family: ui-monospace, monospace; font-size: 0.8rem; white-space: pre-wrap; display: none; }
-  .status-running { color: #b8860b; }
-  .status-done { color: #2e8b57; }
-  .status-error { color: #c0392b; }
-  .runbar { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.5rem; flex-wrap: wrap; }
-  fieldset { border: 1px solid #8883; border-radius: 6px; margin: 1rem 0; padding: 0.8rem 1rem; }
-  legend { font-size: 0.85rem; color: #888; padding: 0 0.3rem; }
-  details { border: 1px solid #8883; border-radius: 6px; margin: 1rem 0; padding: 0.8rem 1rem; }
-  details summary { font-size: 0.85rem; color: #888; cursor: pointer; user-select: none; }
-  details[open] summary { margin-bottom: 0.5rem; }
-  .cal-points { display: flex; flex-direction: column; gap: 0.3rem; margin-bottom: 0.5rem; }
-  .cal-point { display: flex; gap: 0.5rem; align-items: center; }
-  .cal-point input[type=number] { width: 9rem; padding: 0.25rem 0.4rem; }
-  .cal-point span { font-size: 0.8rem; color: #888; width: 1.2rem; }
-  .hint { font-size: 0.78rem; color: #888; margin: 0.3rem 0; }
-  #cal-result { font-size: 0.85rem; margin-top: 0.5rem; }
-  #cal-result table { margin: 0.4rem 0; }
+/* ------------------------------------------------------------------ *
+ * Sin build, sin framework, sin fuentes remotas: la UI es local y
+ * tiene que funcionar sin red, igual que el resto del pipeline.
+ * ------------------------------------------------------------------ */
+:root {
+  --bg: #14161a;
+  --bg-raised: #1b1e24;
+  --bg-sunken: #101216;
+  --line: #2a2f38;
+  --line-soft: #22262e;
+  --fg: #e6e8ec;
+  --fg-dim: #9aa2b1;
+  --fg-faint: #6b7280;
+  --accent: #7dd3a0;
+  --running: #e0a758;
+  --error: #e8705f;
+  --manual: #a78bfa;
+  --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.28);
+  --radius: 10px;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+}
+[data-theme="light"] {
+  --bg: #f6f7f9;
+  --bg-raised: #ffffff;
+  --bg-sunken: #eceef2;
+  --line: #d8dce3;
+  --line-soft: #e6e9ee;
+  --fg: #1c1f26;
+  --fg-dim: #5c6473;
+  --fg-faint: #8b93a1;
+  --accent: #17835a;
+  --running: #a86a12;
+  --error: #c0392b;
+  --manual: #6d4bd6;
+  --shadow: 0 1px 2px rgba(20,25,35,.06), 0 8px 24px rgba(20,25,35,.08);
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 15px/1.55 -apple-system, BlinkMacSystemFont, system-ui, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: 1080px; margin: 0 auto; padding: 0 1.25rem 5rem; }
+h1, h2, h3 { font-weight: 600; letter-spacing: -.01em; margin: 0; }
+code, .mono { font-family: var(--mono); font-size: .85em; }
+a { color: var(--accent); }
+button {
+  font: inherit; font-weight: 500; cursor: pointer;
+  background: var(--bg-raised); color: var(--fg);
+  border: 1px solid var(--line); border-radius: 7px; padding: .42rem .8rem;
+  transition: background .15s, border-color .15s, opacity .15s;
+}
+button:hover:not(:disabled) { border-color: var(--fg-faint); }
+button:disabled { opacity: .45; cursor: not-allowed; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #0e1512; }
+[data-theme="light"] button.primary { color: #fff; }
+button.primary:hover:not(:disabled) { filter: brightness(1.08); }
+button.ghost { background: transparent; border-color: transparent; color: var(--fg-dim); padding: .3rem .5rem; }
+button.ghost:hover { color: var(--fg); background: var(--bg-raised); }
+input, select {
+  font: inherit; background: var(--bg-sunken); color: var(--fg);
+  border: 1px solid var(--line); border-radius: 7px; padding: .42rem .6rem;
+}
+input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
+input::placeholder { color: var(--fg-faint); }
+label { font-size: .9rem; }
+
+/* ---------- barra superior ---------- */
+.topbar {
+  position: sticky; top: 0; z-index: 20; background: var(--bg);
+  border-bottom: 1px solid var(--line-soft); margin-bottom: 1.5rem;
+}
+.topbar-inner {
+  max-width: 1080px; margin: 0 auto; padding: .7rem 1.25rem;
+  display: flex; gap: .75rem; align-items: center; flex-wrap: wrap;
+}
+.brand { font-weight: 650; letter-spacing: -.02em; margin-right: .4rem; }
+.brand span { color: var(--fg-faint); font-weight: 400; }
+.rootbox { display: flex; align-items: center; gap: .5rem; flex: 1; min-width: 260px; }
+#root-input { flex: 1; min-width: 180px; font-family: var(--mono); font-size: .82rem; }
+#root-input.drop { outline: 2px dashed var(--accent); outline-offset: 2px; }
+.chip {
+  font-size: .78rem; padding: .16rem .5rem; border-radius: 999px; white-space: nowrap;
+  border: 1px solid var(--line); color: var(--fg-dim); background: var(--bg-raised);
+}
+.chip.ok { color: var(--accent); border-color: color-mix(in oklab, var(--accent) 45%, transparent); }
+.chip.bad { color: var(--error); border-color: color-mix(in oklab, var(--error) 45%, transparent); }
+
+/* ---------- tarjetas de episodio ---------- */
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: .75rem; }
+.card {
+  background: var(--bg-raised); border: 1px solid var(--line-soft); border-radius: var(--radius);
+  padding: .85rem .95rem; cursor: pointer; text-align: left;
+  display: flex; flex-direction: column; gap: .55rem;
+  transition: border-color .15s, transform .15s;
+}
+.card:hover { border-color: var(--fg-faint); transform: translateY(-1px); }
+.card.active { border-color: var(--accent); }
+.card-top { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+.card-code { font-weight: 600; font-family: var(--mono); font-size: .95rem; }
+.ring { width: 26px; height: 26px; flex: none; }
+.ring circle { fill: none; stroke-width: 3; }
+.ring .bg { stroke: var(--line); }
+.ring .fg { stroke: var(--accent); stroke-linecap: round; transition: stroke-dasharray .4s; }
+.card-meta { font-size: .8rem; color: var(--fg-dim); }
+.badges { display: flex; gap: .3rem; flex-wrap: wrap; }
+.badge { font-size: .72rem; padding: .1rem .42rem; border-radius: 5px; background: var(--bg-sunken); color: var(--fg-dim); }
+.badge.edited { color: var(--manual); background: color-mix(in oklab, var(--manual) 14%, transparent); }
+.badge.done { color: var(--accent); background: color-mix(in oklab, var(--accent) 12%, transparent); }
+
+/* ---------- timeline ---------- */
+.runner { margin-top: 1.75rem; scroll-margin-top: 4.2rem; }
+.runner-head {
+  display: flex; align-items: baseline; gap: .7rem; flex-wrap: wrap;
+  margin-bottom: .2rem;
+}
+.runner-head h2 { font-family: var(--mono); font-size: 1.15rem; }
+.runner-path { font-size: .78rem; color: var(--fg-faint); font-family: var(--mono); }
+.timeline { margin: 1.1rem 0 0; }
+.node {
+  position: relative; display: grid; grid-template-columns: 1.9rem 1fr; gap: .8rem;
+  padding: 0 0 .1rem;
+}
+/* La linea punteada que une los nodos. Se pinta solida cuando el paso de
+   arriba ya esta hecho, asi que el recorrido completo hace de barra de
+   progreso sin necesidad de una barra. */
+.node::before {
+  content: ""; position: absolute; left: .92rem; top: 1.55rem; bottom: -.35rem;
+  border-left: 2px dotted var(--line);
+}
+.node:last-child::before { display: none; }
+.node.filled::before { border-left-style: solid; border-color: color-mix(in oklab, var(--accent) 55%, transparent); }
+.node-dot {
+  width: 1.9rem; height: 1.9rem; border-radius: 50%; display: grid; place-items: center;
+  background: var(--bg); border: 1.5px solid var(--line); color: var(--fg-faint);
+  font-size: .82rem; z-index: 1; transition: border-color .15s, color .15s;
+}
+.node-body {
+  padding: .18rem 0 1rem; border-radius: 8px; cursor: pointer;
+}
+.node-line { display: flex; align-items: baseline; gap: .55rem; flex-wrap: wrap; }
+.node-num { color: var(--fg-faint); font-size: .78rem; font-variant-numeric: tabular-nums; min-width: 1.1rem; }
+.node-title { font-weight: 550; }
+.node-key { font-family: var(--mono); font-size: .74rem; color: var(--fg-faint); }
+.node-dur { margin-left: auto; font-size: .78rem; color: var(--fg-faint); font-variant-numeric: tabular-nums; }
+.node-summary { font-size: .855rem; color: var(--fg-dim); margin-top: .1rem; max-width: 62ch; }
+.node-note { font-size: .8rem; margin-top: .25rem; }
+.node-safeguard {
+  font-size: .8rem; color: var(--fg-faint); margin-top: .35rem; max-width: 62ch;
+  padding-left: .6rem; border-left: 2px solid var(--line-soft);
+}
+
+.node[data-state="done"] .node-dot { border-color: var(--accent); color: var(--accent); }
+.node[data-state="noop"] .node-dot { border-color: var(--line); color: var(--fg-dim); }
+.node[data-state="running"] .node-dot { border-color: var(--running); color: var(--running); animation: pulse 1.4s ease-in-out infinite; }
+.node[data-state="error"] .node-dot { border-color: var(--error); color: var(--error); }
+.node[data-state="skipped"] .node-dot { border-color: var(--line); color: var(--fg-faint); }
+.node.manual .node-dot { border-color: var(--manual); color: var(--manual); }
+.node[data-state="done"].manual .node-dot { border-color: var(--accent); color: var(--accent); }
+@keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .45 } }
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
+
+/* Rango seleccionado */
+.node.in-range .node-body { background: color-mix(in oklab, var(--accent) 7%, transparent); }
+.node.in-range .node-title { color: var(--fg); }
+.node:not(.in-range) .node-title { color: var(--fg-dim); }
+.node.warn .node-body { background: color-mix(in oklab, var(--error) 10%, transparent); }
+.node.warn .node-title { color: var(--error); }
+
+/* ---------- paneles contextuales ---------- */
+.panel {
+  margin-top: .7rem; padding: .8rem .9rem; background: var(--bg-raised);
+  border: 1px solid var(--line-soft); border-radius: 9px; cursor: default;
+}
+.panel h4 { margin: 0 0 .45rem; font-size: .85rem; font-weight: 600; color: var(--fg-dim); }
+.panel .hint { font-size: .82rem; color: var(--fg-dim); margin: .35rem 0; max-width: 68ch; }
+.row { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin: .4rem 0; }
+.cal-point { display: flex; gap: .45rem; align-items: center; }
+.cal-point input { width: 8rem; }
+.cal-point .n { font-size: .78rem; color: var(--fg-faint); width: 1.2rem; }
+table.mini { width: 100%; border-collapse: collapse; font-size: .82rem; margin: .5rem 0; }
+table.mini th, table.mini td { text-align: left; padding: .25rem .5rem; border-bottom: 1px solid var(--line-soft); }
+table.mini th { color: var(--fg-faint); font-weight: 500; }
+.ok { color: var(--accent); }
+.bad { color: var(--error); }
+.warnc { color: var(--running); }
+
+/* ---------- barra de ejecucion ---------- */
+.runbar {
+  /* Los puntos del timeline llevan z-index para taparle la linea al
+     conector. Sin un z-index mayor aqui, se cuelan por encima del boton
+     al hacer scroll — y el degradado transparente no los oculta. */
+  position: sticky; bottom: 0; z-index: 10; margin-top: .5rem;
+  padding: 1.4rem 0 .9rem;
+  background: linear-gradient(to top, var(--bg) 0, var(--bg) 68%, transparent);
+  display: flex; gap: .7rem; align-items: center; flex-wrap: wrap;
+}
+.runbar .what { font-size: .85rem; color: var(--fg-dim); }
+#log-wrap { margin-top: .5rem; }
+#log-wrap summary { font-size: .82rem; color: var(--fg-dim); cursor: pointer; user-select: none; }
+#log {
+  background: var(--bg-sunken); border: 1px solid var(--line-soft); border-radius: 8px;
+  padding: .7rem .8rem; max-height: 320px; overflow-y: auto; margin-top: .5rem;
+  font-family: var(--mono); font-size: .78rem; white-space: pre-wrap; color: var(--fg-dim);
+}
+
+/* ---------- vacios y toast ---------- */
+.empty {
+  border: 1px dashed var(--line); border-radius: var(--radius); padding: 2rem 1.5rem;
+  text-align: center; color: var(--fg-dim); font-size: .9rem;
+}
+.empty strong { color: var(--fg); display: block; margin-bottom: .3rem; font-size: 1rem; }
+#toasts { position: fixed; right: 1.1rem; bottom: 1.1rem; display: flex; flex-direction: column; gap: .5rem; z-index: 50; }
+.toast {
+  background: var(--bg-raised); border: 1px solid var(--line); border-left-width: 3px;
+  border-radius: 8px; padding: .6rem .85rem; box-shadow: var(--shadow); font-size: .87rem;
+  animation: slidein .2s ease-out;
+}
+.toast.ok { border-left-color: var(--accent); }
+.toast.bad { border-left-color: var(--error); }
+@keyframes slidein { from { opacity: 0; transform: translateY(6px) } to { opacity: 1; transform: none } }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 </style>
 </head>
 <body>
-<h1>remaster — episodios</h1>
-<p class="steps">Carpeta base: <code id="root"></code> (variable de entorno REMASTER_MOVIES_DIR)</p>
-<table id="episodes"><thead>
-  <tr><th>Episodio</th><th>Pasos hechos</th><th>Sync</th><th>Analisis</th><th>MKV final</th><th></th></tr>
-</thead><tbody></tbody></table>
 
-<div id="runner" style="display:none">
-  <h2 id="runner-title"></h2>
-
-  <details id="cal-details">
-    <summary>Calibracion manual del sync (opcional)</summary>
-    <p class="hint">
-      Mide en REAPER el mismo instante en ES y en EN (segundos). Minimo 2 puntos
-      — con mas de 2 se ajusta por minimos cuadrados en vez de resolver exacto.
-      Si mediste contra un proyecto que ya tenia un offset constante aplicado
-      (sin deriva), indicalo en "offset ya aplicado"; si mediste contra las
-      fuentes sin corregir, dejalo en 0.
-    </p>
-    <div class="cal-points" id="cal-points"></div>
-    <div class="runbar">
-      <button id="cal-add-point" type="button">+ punto</button>
-      <label>offset ya aplicado (s) <input type="number" id="cal-against-offset" value="0" step="0.001" style="width:6rem"></label>
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">remaster<span> · audio</span></div>
+    <div class="rootbox">
+      <input type="text" id="root-input" spellcheck="false"
+             placeholder="/ruta/a/tus/episodios — o arrastra la carpeta aqui">
+      <span class="chip" id="root-chip">…</span>
+      <select id="root-recent" style="display:none" title="carpetas recientes"></select>
     </div>
-    <div class="runbar">
-      <button id="cal-compute-btn">Calcular</button>
-      <button id="cal-apply-btn" disabled>Aplicar a este episodio</button>
-    </div>
-    <div id="cal-result"></div>
-  </details>
-
-  <fieldset id="verify-box">
-    <legend>Re-analizar tras sincronizar a mano</legend>
-    <p class="hint">
-      Compara el proyecto tal como lo has dejado (con sus cortes y sus rellenos de otras
-      pistas) contra el ingles, y te dice que tramos revisar y que hacer con cada uno.
-      <br><br>
-      <b>Antes de pulsar, mide en REAPER:</b> abre el proyecto, selecciona las pistas a
-      analizar (<b>ES VOX</b> y <b>EN VOX</b>) y ejecuta la accion
-      <b>«Calculate loudness of selected tracks via dry run render»</b>. Luego vuelve aqui.
-      <br>
-      Sin esa medida el analisis sale a medias: falta el volumen global, el margen real
-      antes de saturar y el veredicto sobre la envolvente.
-    </p>
-    <p class="hint" id="verify-stats-state">—</p>
-    <div class="runbar">
-      <button id="verify-btn">Re-analizar</button>
-      <label><input type="checkbox" id="verify-no-stats"> sin medir (analisis parcial)</label>
-      <a id="verify-report-link" href="#" target="_blank" style="display:none">ver ultimo informe</a>
-    </div>
-  </fieldset>
-
-  <div class="runbar">
-    <label>nombre del fichero final
-      <input type="text" id="final_name"
-             placeholder='p.ej. "Las aventuras de Sherlock Holmes (1984) S02E06 El problema final"'
-             style="width:32rem">
-      <small style="display:block;color:#888">todo lo que va delante del guion; los corchetes
-        ([1080p AVC] [FLAC ...] [Subs ...]) se añaden solos. En blanco = se conserva el nombre del Blu-ray.</small>
-    </label>
+    <button class="ghost" id="theme-btn" title="claro / oscuro">◐</button>
   </div>
-  <div class="runbar">
-    <label>desde <select id="from_step"></select></label>
-    <label>hasta <select id="to_step"></select></label>
-    <label>separador
-      <select id="separator"><option value="local">local</option><option value="mvsep">mvsep</option></select>
-    </label>
-    <label><input type="checkbox" id="force"> --force</label>
-    <button id="run-btn">Ejecutar</button>
-    <span id="status"></span>
-  </div>
-  <pre id="log"></pre>
+</header>
+
+<div class="wrap">
+  <div id="episodes"></div>
+
+  <section class="runner" id="runner" style="display:none">
+    <div class="runner-head">
+      <h2 id="runner-code"></h2>
+      <span class="runner-path" id="runner-path"></span>
+      <span class="badges" id="runner-badges"></span>
+    </div>
+
+    <div class="timeline" id="timeline"></div>
+
+    <div class="runbar">
+      <button class="primary" id="run-btn">Ejecutar</button>
+      <span class="what" id="run-what"></span>
+      <label style="margin-left:auto"><input type="checkbox" id="force"> rehacer aunque este al dia</label>
+      <span class="chip" id="run-status" style="display:none"></span>
+    </div>
+
+    <details id="log-wrap">
+      <summary>ver salida</summary>
+      <pre id="log"></pre>
+    </details>
+  </section>
 </div>
 
+<div id="toasts"></div>
+
 <script>
-let currentEpisode = null;
+'use strict';
+
+// ---------------------------------------------------------------- estado
+let STEPS = [];            // metadatos de /api/steps, en orden
+let episodes = [];
+let current = null;        // episodio abierto (objeto de /api/episodes)
+let rangeFrom = 0, rangeTo = 0;
+let liveStates = {};       // step -> {state, outcome, seconds, reason} del job en curso
 let pollTimer = null;
+let jobRunning = false;
+// Los paneles se construyen una vez y se REUTILIZAN: appendChild mueve el
+// nodo existente en vez de recrearlo, asi que redibujar el timeline cada
+// 1.2s mientras corre un job no te quita el foco de un campo a medio
+// escribir. Quien cambia el contenido de un panel lo invalida a mano.
+let panelCache = {};
 
-async function loadEpisodes() {
-  const res = await fetch('/api/episodes');
-  const episodes = await res.json();
-  const tbody = document.querySelector('#episodes tbody');
-  tbody.innerHTML = '';
-  for (const ep of episodes) {
-    const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td><a href="#" data-path="${ep.path}">${ep.code}</a></td>
-      <td class="steps">${ep.steps_done.join(', ') || '—'}</td>
-      <td>${ep.has_align_png ? `<a href="/api/episodes/${ep.code}/align.png" target="_blank">ver</a>` : '—'}</td>
-      <td>${ep.has_verify ? `<a href="/api/episodes/${ep.code}/verify.html" target="_blank">ver</a>` : '—'}</td>
-      <td>${ep.has_final_mkv ? 'si' : '—'}</td>
-      <td><a href="#" data-path="${ep.path}" class="open">abrir</a></td>
-    `;
-    tbody.appendChild(tr);
-  }
-  document.querySelectorAll('a[data-path]').forEach(a => {
-    a.addEventListener('click', (e) => { e.preventDefault(); openRunner(a.dataset.path); });
-  });
+const $ = (id) => document.getElementById(id);
+const GLYPH = { pending: '○', running: '◐', done: '✓', noop: '·', skipped: '⊘', error: '✕' };
+
+// ---------------------------------------------------------------- tema
+function applyTheme(t) {
+  document.documentElement.dataset.theme = t;
+  try { localStorage.setItem('remaster-theme', t); } catch (e) {}
+}
+$('theme-btn').addEventListener('click', () => {
+  applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
+});
+// Oscuro por defecto — se trabaja con REAPER al lado, que tambien lo es.
+// El interruptor manda, y se recuerda.
+try { applyTheme(localStorage.getItem('remaster-theme') || 'dark'); } catch (e) { applyTheme('dark'); }
+
+// ---------------------------------------------------------------- utilidades
+async function api(url, opts) {
+  const res = await fetch(url, opts);
+  let data = null;
+  try { data = await res.json(); } catch (e) {}
+  if (!res.ok) throw new Error((data && data.detail) || `${res.status} ${res.statusText}`);
+  return data;
+}
+async function post(url, body) {
+  return api(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+}
+function toast(msg, kind) {
+  const el = document.createElement('div');
+  el.className = 'toast ' + (kind || '');
+  el.textContent = msg;
+  $('toasts').appendChild(el);
+  setTimeout(() => el.remove(), 6000);
+}
+function fmtSeconds(s) {
+  if (s == null) return '';
+  if (s < 60) return `${s < 10 ? s.toFixed(1) : Math.round(s)}s`;
+  const m = Math.floor(s / 60);
+  return `${m}m ${Math.round(s - m * 60)}s`;
+}
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-let calSteps = [];
-
-async function openRunner(path) {
-  currentEpisode = path;
-  document.getElementById('runner').style.display = 'block';
-  document.getElementById('runner-title').textContent = path;
-  document.getElementById('log').style.display = 'none';
-  document.getElementById('log').textContent = '';
-  document.getElementById('status').textContent = '';
-  document.getElementById('cal-result').innerHTML = '';
-  document.getElementById('cal-apply-btn').disabled = true;
-  document.getElementById('final_name').value = '';
-  refreshVerifyBox();
-
-  calSteps = await (await fetch('/api/steps')).json();
-  for (const sel of [document.getElementById('from_step'), document.getElementById('to_step')]) {
-    sel.innerHTML = calSteps.map(s => `<option value="${s}">${s}</option>`).join('');
-  }
-  document.getElementById('to_step').value = 'mux';
-
-  resetCalibrationPoints();
-}
-
-function resetCalibrationPoints() {
-  const container = document.getElementById('cal-points');
-  container.innerHTML = '';
-  addCalibrationPoint();
-  addCalibrationPoint();
-}
-
-function addCalibrationPoint() {
-  const container = document.getElementById('cal-points');
-  const row = document.createElement('div');
-  row.className = 'cal-point';
-  row.innerHTML = `
-    <span>${container.children.length + 1}.</span>
-    ES <input type="number" class="cal-es" step="0.001" placeholder="segundos">
-    EN <input type="number" class="cal-en" step="0.001" placeholder="segundos">
-    <button type="button" class="cal-remove">quitar</button>
-  `;
-  row.querySelector('.cal-remove').addEventListener('click', () => {
-    if (container.children.length > 2) {
-      row.remove();
-      renumberCalibrationPoints();
-    }
-  });
-  container.appendChild(row);
-}
-
-function renumberCalibrationPoints() {
-  document.querySelectorAll('#cal-points .cal-point span').forEach((span, i) => {
-    span.textContent = `${i + 1}.`;
-  });
-}
-
-document.getElementById('cal-add-point').addEventListener('click', addCalibrationPoint);
-
-function readCalibrationPoints() {
-  const points = [];
-  document.querySelectorAll('#cal-points .cal-point').forEach(row => {
-    const es = row.querySelector('.cal-es').value;
-    const en = row.querySelector('.cal-en').value;
-    if (es !== '' && en !== '') points.push({ es: parseFloat(es), en: parseFloat(en) });
-  });
-  return points;
-}
-
-async function submitCalibration(apply) {
-  const points = readCalibrationPoints();
-  const resultDiv = document.getElementById('cal-result');
-  if (points.length < 2) {
-    resultDiv.innerHTML = '<span class="status-error">Hacen falta al menos 2 puntos con ambos valores rellenos.</span>';
-    return;
-  }
-  const body = {
-    episode: currentEpisode,
-    points,
-    against_offset: parseFloat(document.getElementById('cal-against-offset').value || '0'),
-    apply,
-  };
-  const res = await fetch('/api/calibrate', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-  });
-  const data = await res.json();
-  if (!res.ok) {
-    resultDiv.innerHTML = `<span class="status-error">${data.detail || 'error'}</span>`;
-    return;
-  }
-
-  const rows = points.map((p, i) => `<tr><td>${i + 1}</td><td>${p.es}</td><td>${p.en}</td><td>${data.residuals[i].toFixed(4)}</td></tr>`).join('');
-  resultDiv.innerHTML = `
-    <table><thead><tr><th>Punto</th><th>ES (s)</th><th>EN (s)</th><th>Residuo (s)</th></tr></thead>
-    <tbody>${rows}</tbody></table>
-    offset_seconds = ${data.offset_seconds.toFixed(4)} &nbsp; drift_slope = ${data.drift_slope.toFixed(7)}
-  `;
-  document.getElementById('cal-apply-btn').disabled = false;
-
-  if (apply) {
-    resultDiv.innerHTML += data.step_ran
-      ? '<p class="status-done">Aplicado a align.json.</p>'
-      : '<p class="hint">Sin cambios (ya estaba aplicado con estos valores).</p>';
-    resultDiv.innerHTML += '<p class="hint">Para conservarla: el rango de "Ejecutar" no debe incluir el paso align '
-      + '(lo repetiria con el sync automatico y la sobreescribiria). Ya se ha puesto "desde" en loudness.</p>';
-    if (calSteps.includes('loudness')) {
-      document.getElementById('from_step').value = 'loudness';
-    }
-    loadEpisodes();
-  }
-}
-
-document.getElementById('cal-compute-btn').addEventListener('click', () => submitCalibration(false));
-document.getElementById('cal-apply-btn').addEventListener('click', () => submitCalibration(true));
-
-function currentCode() {
-  return currentEpisode ? currentEpisode.split('/').filter(Boolean).pop() : null;
-}
-
-async function refreshVerifyBox() {
-  const code = currentCode();
-  const state = document.getElementById('verify-stats-state');
-  const link = document.getElementById('verify-report-link');
-  link.style.display = 'none';
-  if (!code) { state.textContent = '—'; return; }
-
-  const episodes = await (await fetch('/api/episodes')).json();
-  const ep = episodes.find(e => e.code === code);
-  if (ep && ep.has_verify) {
-    link.href = `/api/episodes/${code}/verify.html`;
-    link.style.display = 'inline';
-  }
-
-  const info = await (await fetch(`/api/episodes/${code}/render-stats`)).json();
-  if (!info.found) {
-    state.innerHTML = '<span class="status-error">Todavia no has medido en REAPER.</span> '
-      + 'Ejecuta alli la accion de arriba, o marca «sin medir» para un analisis parcial.';
+// ---------------------------------------------------------------- carpeta base
+async function loadRoot() {
+  const info = await api('/api/root');
+  $('root-input').value = info.path;
+  paintRootChip(info);
+  const sel = $('root-recent');
+  if (info.recent && info.recent.length > 1) {
+    sel.innerHTML = '<option value="">recientes…</option>' +
+      info.recent.map(r => `<option value="${escapeHtml(r)}">${escapeHtml(r)}</option>`).join('');
+    sel.style.display = '';
   } else {
-    const stale = info.age_minutes > 120;
-    state.innerHTML = `Ultima medida de REAPER: ${info.modified} (hace ${info.age_minutes} min)`
-      + (stale ? ' — <span class="status-error">si has tocado el proyecto despues, vuelve a medir.</span>' : '')
-      + `<br><code>${info.path}</code>`;
+    sel.style.display = 'none';
+  }
+}
+function paintRootChip(info) {
+  const chip = $('root-chip');
+  if (!info.exists) { chip.textContent = 'no existe'; chip.className = 'chip bad'; return; }
+  chip.textContent = info.episode_count === 1 ? '1 episodio' : `${info.episode_count} episodios`;
+  chip.className = 'chip ' + (info.episode_count ? 'ok' : '');
+}
+async function setRoot(path) {
+  try {
+    const info = await post('/api/root', { path });
+    $('root-input').value = info.path;
+    paintRootChip(info);
+    current = null;
+    $('runner').style.display = 'none';
+    await loadRoot();
+    await loadEpisodes();
+  } catch (e) {
+    $('root-chip').textContent = e.message;
+    $('root-chip').className = 'chip bad';
+  }
+}
+$('root-input').addEventListener('change', (e) => setRoot(e.target.value));
+$('root-recent').addEventListener('change', (e) => { if (e.target.value) setRoot(e.target.value); });
+
+// Arrastrar una carpeta del Finder. Chrome/Safari en macOS ponen el
+// `file://` en text/uri-list; si el navegador solo da el nombre, se
+// rellena con lo que haya y se dice que falta la ruta, en vez de fingir
+// que ha funcionado.
+const rootInput = $('root-input');
+['dragenter', 'dragover'].forEach(ev => rootInput.addEventListener(ev, (e) => {
+  e.preventDefault(); rootInput.classList.add('drop');
+}));
+['dragleave', 'drop'].forEach(ev => rootInput.addEventListener(ev, () => rootInput.classList.remove('drop')));
+rootInput.addEventListener('drop', (e) => {
+  e.preventDefault();
+  const dt = e.dataTransfer;
+  let path = (dt.getData('text/uri-list') || '').split('\n').find(l => l && !l.startsWith('#')) || '';
+  if (!path) path = dt.getData('text/plain') || '';
+  if (path.startsWith('file://')) {
+    try { path = decodeURIComponent(new URL(path).pathname); } catch (err) { path = ''; }
+  }
+  if (path) { path = path.replace(/\/$/, ''); setRoot(path); return; }
+
+  const item = dt.items && dt.items[0];
+  const entry = item && item.webkitGetAsEntry && item.webkitGetAsEntry();
+  if (entry) {
+    rootInput.value = entry.name;
+    $('root-chip').textContent = 'tu navegador solo da el nombre — completa la ruta';
+    $('root-chip').className = 'chip bad';
+    rootInput.focus();
+  }
+});
+
+// ---------------------------------------------------------------- episodios
+async function loadEpisodes() {
+  episodes = await api('/api/episodes');
+  const box = $('episodes');
+  if (!episodes.length) {
+    const info = await api('/api/root');
+    box.innerHTML = info.exists
+      ? `<div class="empty"><strong>Ninguna carpeta de episodio aqui</strong>
+           Se espera una carpeta por episodio, cada una con <code>00_sources/</code> dentro.</div>`
+      : `<div class="empty"><strong>Elige la carpeta con tus episodios</strong>
+           Escribe la ruta arriba, o arrastra la carpeta desde el Finder al campo.</div>`;
+    return;
+  }
+  box.innerHTML = '<div class="grid"></div>';
+  const grid = box.firstChild;
+  for (const ep of episodes) {
+    const done = Object.keys(ep.steps).length;
+    const frac = done / ep.steps_total;
+    const card = document.createElement('button');
+    card.className = 'card' + (current && current.path === ep.path ? ' active' : '');
+    card.innerHTML = `
+      <div class="card-top">
+        <span class="card-code">${escapeHtml(ep.code)}</span>
+        <svg class="ring" viewBox="0 0 32 32">
+          <circle class="bg" cx="16" cy="16" r="13"></circle>
+          <circle class="fg" cx="16" cy="16" r="13" transform="rotate(-90 16 16)"
+                  stroke-dasharray="${(frac * 81.7).toFixed(1)} 81.7"></circle>
+        </svg>
+      </div>
+      <div class="card-meta">${done ? `${done} de ${ep.steps_total} pasos` : 'sin empezar'}</div>
+      <div class="badges">
+        ${ep.rpp_hand_edited ? '<span class="badge edited">editado a mano</span>' : ''}
+        ${ep.has_verify ? '<span class="badge">informe</span>' : ''}
+        ${ep.has_final_mkv ? '<span class="badge done">MKV</span>' : ''}
+      </div>`;
+    card.addEventListener('click', () => openEpisode(ep.path));
+    grid.appendChild(card);
   }
 }
 
-function startJob(jobId) {
-  document.getElementById('log').style.display = 'block';
-  document.getElementById('log').textContent = '';
-  document.getElementById('status').textContent = 'ejecutando...';
-  document.getElementById('status').className = 'status-running';
-  if (pollTimer) clearInterval(pollTimer);
-  pollTimer = setInterval(() => pollJob(jobId), 1500);
+async function openEpisode(path) {
+  current = episodes.find(e => e.path === path) || null;
+  if (!current) return;
+  liveStates = {};
+  panelCache = {};
+  $('runner').style.display = '';
+  $('runner-code').textContent = current.code;
+  $('runner-path').textContent = current.path;
+  paintRunnerBadges();
+  // Al abrir, el rango util por defecto es "lo que falta". Si no falta
+  // nada, lo que toca es revisar: es el bucle editar ⇄ verify.
+  const firstPending = STEPS.findIndex(s => !current.steps[s.key]);
+  if (firstPending === -1) {
+    rangeFrom = rangeTo = STEPS.findIndex(s => s.key === 'verify');
+  } else {
+    rangeFrom = firstPending;
+    rangeTo = STEPS.length - 1;
+  }
+  renderTimeline();
+  await loadEpisodes();
+  refreshVerifyPanel();
+  if (location.hash.slice(1) !== current.code) location.hash = current.code;
+  $('runner').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
-document.getElementById('verify-btn').addEventListener('click', async () => {
-  if (!currentEpisode) return;
-  const res = await fetch('/api/verify', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({
-      episode: currentEpisode,
-      no_stats: document.getElementById('verify-no-stats').checked,
-    }),
+function paintRunnerBadges() {
+  const b = [];
+  if (current.rpp_hand_edited) b.push('<span class="badge edited">editado a mano</span>');
+  if (current.has_rpp) b.push('<span class="badge">.RPP</span>');
+  if (current.has_verify) b.push(
+    `<span class="badge"><a href="/api/episodes/${encodeURIComponent(current.code)}/verify.html"
+      target="_blank" style="color:inherit">informe ↗</a></span>`);
+  if (current.has_align_png) b.push(
+    `<span class="badge"><a href="/api/episodes/${encodeURIComponent(current.code)}/align.png"
+      target="_blank" style="color:inherit">sync ↗</a></span>`);
+  if (current.has_final_mkv) b.push('<span class="badge done">MKV</span>');
+  $('runner-badges').innerHTML = b.join('');
+}
+
+function openFromHash() {
+  const code = decodeURIComponent(location.hash.slice(1));
+  if (!code) return;
+  const ep = episodes.find(e => e.code === code);
+  if (ep && (!current || current.code !== code)) openEpisode(ep.path);
+}
+window.addEventListener('hashchange', openFromHash);
+
+// ---------------------------------------------------------------- timeline
+// El `outcome` que manda la traza y el estado que pinta la UI no son lo
+// mismo: la traza dice si el paso hizo trabajo ("ran") y la UI dibuja si
+// esta hecho ("done"). Sin esta tabla, un paso recien ejecutado llegaba
+// como "ran", que no esta ni en GLYPH ni en el CSS, y se quedaba con el
+// circulo de pendiente y la linea punteada.
+const OUTCOME_STATE = { ran: 'done', noop: 'noop', skipped: 'skipped', error: 'error' };
+
+function stepState(i) {
+  const key = STEPS[i].key;
+  const live = liveStates[key];
+  if (live) {
+    if (live.state === 'running') return 'running';
+    return OUTCOME_STATE[live.outcome] || 'done';
+  }
+  if (current && current.steps[key]) return 'done';
+  return 'pending';
+}
+
+function renderTimeline() {
+  const tl = $('timeline');
+  tl.innerHTML = '';
+  STEPS.forEach((info, i) => {
+    const state = stepState(i);
+    const live = liveStates[info.key];
+    const inRange = i >= rangeFrom && i <= rangeTo;
+    const warnsProject = info.key === 'project' && inRange && current && current.rpp_hand_edited;
+
+    const node = document.createElement('div');
+    node.className = 'node'
+      + (info.manual ? ' manual' : '')
+      + (inRange ? ' in-range' : '')
+      + (warnsProject ? ' warn' : '')
+      + (state === 'done' || state === 'noop' ? ' filled' : '');
+    node.dataset.state = state;
+    node.dataset.step = info.key;
+
+    const seconds = live ? live.seconds : (current && current.steps[info.key] || {}).seconds;
+    const note = warnsProject
+      ? `<div class="node-note bad">Tu .RPP tiene cambios que no hizo el pipeline. Este paso se negara a
+         pisarlos: quita este paso del rango (empieza en «verify» o «render») o marca «rehacer» para
+         regenerarlo, que guarda una copia antes.</div>`
+      : (live && live.reason ? `<div class="node-note" style="color:var(--fg-faint)">${escapeHtml(live.reason)}</div>` : '');
+
+    node.innerHTML = `
+      <div class="node-dot">${GLYPH[state] || '○'}</div>
+      <div class="node-body">
+        <div class="node-line">
+          <span class="node-num">${i + 1}</span>
+          <span class="node-title">${escapeHtml(info.title)}</span>
+          <span class="node-key">${escapeHtml(info.key)}</span>
+          ${info.manual ? '<span class="badge edited">manual</span>' : ''}
+          ${state === 'noop' ? '<span class="badge">sin cambios</span>' : ''}
+          <span class="node-dur">${fmtSeconds(seconds)}</span>
+        </div>
+        <div class="node-summary">${escapeHtml(info.summary)}</div>
+        ${note}
+        <div class="node-safeguard">${escapeHtml(info.safeguard)}</div>
+      </div>`;
+
+    const body = node.querySelector('.node-body');
+    body.addEventListener('click', (e) => {
+      if (e.target.closest('.panel')) return;
+      if (e.shiftKey) {
+        if (i < rangeFrom) rangeFrom = i; else rangeTo = i;
+      } else {
+        rangeFrom = rangeTo = i;
+      }
+      renderTimeline();
+      refreshVerifyPanel();
+    });
+
+    const panel = buildPanel(info.key, inRange);
+    if (panel) body.appendChild(panel);
+    tl.appendChild(node);
   });
-  const { job_id } = await res.json();
-  startJob(job_id);
+  paintRunBar();
+}
+
+function paintRunBar() {
+  const a = STEPS[rangeFrom], b = STEPS[rangeTo];
+  $('run-what').textContent = rangeFrom === rangeTo
+    ? `solo «${a.title}»`
+    : `${rangeTo - rangeFrom + 1} pasos: ${a.key} → ${b.key}`;
+  const blockedVerify = a.key === 'verify' && b.key === 'verify' && !verifyReady;
+  $('run-btn').disabled = blockedVerify || jobRunning;
+  $('run-btn').textContent = jobRunning ? 'Ejecutando…'
+    : (blockedVerify ? 'Mide primero en REAPER' : 'Ejecutar');
+}
+
+// ---------------------------------------------------------------- paneles
+const PANEL_HTML = { align: calibrationHtml, separate: separatorHtml, verify: verifyHtml, mux: nameHtml };
+const PANEL_WIRE = { align: wireCalibration, separate: wireSeparator, verify: wireVerify, mux: wireName };
+
+function buildPanel(key, inRange) {
+  if (!inRange || !PANEL_HTML[key]) return null;
+  // Calibrar es corregir un sync que ya existe: antes del primer `align`
+  // no hay nada que corregir, y el panel solo estorbaria.
+  if (key === 'align' && !(current && current.steps.align)) return null;
+  if (panelCache[key]) return panelCache[key];
+  const el = document.createElement('div');
+  el.className = 'panel';
+  if (key === 'verify') el.id = 'verify-panel';
+  el.innerHTML = PANEL_HTML[key]();
+  PANEL_WIRE[key](el);
+  panelCache[key] = el;
+  return el;
+}
+
+/** Rehacer el contenido de un panel: solo cuando cambia de verdad. */
+function repaintPanel(key) {
+  delete panelCache[key];
+  renderTimeline();
+}
+
+/* --- align: calibracion manual --- */
+let calPoints = [{ es: '', en: '' }, { es: '', en: '' }];
+let calAgainst = 0;
+let calResult = null;
+
+function calibrationHtml() {
+  const rows = calPoints.map((p, i) => `
+    <div class="cal-point">
+      <span class="n">${i + 1}.</span>
+      ES <input type="number" step="0.001" class="cal-es" value="${p.es}" placeholder="segundos">
+      EN <input type="number" step="0.001" class="cal-en" value="${p.en}" placeholder="segundos">
+      <button class="ghost cal-del" ${calPoints.length <= 2 ? 'disabled' : ''}>quitar</button>
+    </div>`).join('');
+  return `
+    <h4>Calibrar el sync a mano (opcional)</h4>
+    <p class="hint">Si el sync automatico no acaba de cuadrar, mide en REAPER el mismo instante en las dos
+      pistas y apuntalo aqui. Con 2 puntos se resuelve exacto; con mas, por minimos cuadrados.</p>
+    <div id="cal-points">${rows}</div>
+    <div class="row">
+      <button class="ghost" id="cal-add">+ punto</button>
+      <label>offset ya aplicado (s)
+        <input type="number" id="cal-against" step="0.001" value="${calAgainst}" style="width:6rem"></label>
+      <span class="hint" style="margin:0">0 si mediste contra las fuentes sin corregir.</span>
+    </div>
+    <div class="row">
+      <button id="cal-calc">Calcular</button>
+      <button id="cal-apply" ${calResult ? '' : 'disabled'}>Aplicar a este episodio</button>
+    </div>
+    <div id="cal-out">${calResult ? calResultHtml(calResult) : ''}</div>`;
+}
+function calResultHtml(d) {
+  const rows = d.points.map((p, i) =>
+    `<tr><td>${i + 1}</td><td>${p.es}</td><td>${p.en}</td><td>${d.residuals[i].toFixed(4)}</td></tr>`).join('');
+  return `<table class="mini"><thead><tr><th>Punto</th><th>ES (s)</th><th>EN (s)</th><th>Residuo (s)</th></tr></thead>
+    <tbody>${rows}</tbody></table>
+    <div class="hint">offset <b>${d.offset_seconds.toFixed(4)}s</b> · deriva <b>${d.drift_slope.toFixed(7)}</b></div>
+    ${d.appliedMsg || ''}`;
+}
+function readCalPoints(root) {
+  const rows = [...root.querySelectorAll('.cal-point')];
+  calPoints = rows.map(r => ({ es: r.querySelector('.cal-es').value, en: r.querySelector('.cal-en').value }));
+  return calPoints.filter(p => p.es !== '' && p.en !== '').map(p => ({ es: +p.es, en: +p.en }));
+}
+function wireCalibration(root) {
+  root.querySelector('#cal-add').addEventListener('click', () => {
+    readCalPoints(root); calPoints.push({ es: '', en: '' }); repaintPanel('align');
+  });
+  root.querySelectorAll('.cal-del').forEach((b, i) => b.addEventListener('click', () => {
+    readCalPoints(root); calPoints.splice(i, 1); repaintPanel('align');
+  }));
+  root.querySelector('#cal-against').addEventListener('change', e => { calAgainst = +e.target.value || 0; });
+  const submit = async (apply) => {
+    const points = readCalPoints(root);
+    const out = root.querySelector('#cal-out');
+    if (points.length < 2) { out.innerHTML = '<div class="hint bad">Hacen falta 2 puntos con los dos valores.</div>'; return; }
+    try {
+      const d = await post('/api/calibrate', { episode: current.path, points, against_offset: calAgainst, apply });
+      d.points = points;
+      if (apply) {
+        d.appliedMsg = d.step_ran
+          ? '<div class="hint ok">Aplicado. He puesto el rango a partir de «loudness» para no repetir align, que la sobrescribiria.</div>'
+          : '<div class="hint">Sin cambios: ya estaba aplicado con estos valores.</div>';
+      }
+      calResult = d;
+      if (apply) {
+        const li = STEPS.findIndex(s => s.key === 'loudness');
+        if (li !== -1) { rangeFrom = li; rangeTo = Math.max(li, rangeTo); }
+        await loadEpisodes();
+      }
+      repaintPanel('align');
+    } catch (e) {
+      out.innerHTML = `<div class="hint bad">${escapeHtml(e.message)}</div>`;
+    }
+  };
+  root.querySelector('#cal-calc').addEventListener('click', () => submit(false));
+  root.querySelector('#cal-apply').addEventListener('click', () => submit(true));
+}
+
+/* --- separate: backend y token --- */
+let separator = 'local';
+let tokenInfo = { mvsep_token_set: false, source: '', env_path: '' };
+function separatorHtml() {
+  const needsToken = separator === 'mvsep';
+  return `
+    <h4>Como separar</h4>
+    <div class="row">
+      <label>backend
+        <select id="sep-backend">
+          <option value="local" ${separator === 'local' ? 'selected' : ''}>local (offline, mas lento)</option>
+          <option value="mvsep" ${separator === 'mvsep' ? 'selected' : ''}>mvsep (en la nube, necesita token)</option>
+        </select>
+      </label>
+    </div>
+    ${needsToken ? `
+      <div class="row">
+        <label>token de MVSEP
+          <input type="password" id="sep-token" style="width:16rem"
+                 placeholder="${tokenInfo.mvsep_token_set ? '•••••••••• (ya guardado)' : 'pega aqui tu token'}"></label>
+        <button class="ghost" id="sep-eye" title="ver">👁</button>
+        <label><input type="checkbox" id="sep-remember" checked> recordar en .env</label>
+        <button id="sep-save">Guardar</button>
+        <span class="chip ${tokenInfo.mvsep_token_set ? 'ok' : ''}" id="sep-state">
+          ${tokenInfo.mvsep_token_set ? 'cargado de ' + escapeHtml(tokenInfo.source) : 'sin token'}</span>
+      </div>
+      <p class="hint">Se guarda en <code>${escapeHtml(tokenInfo.env_path)}</code>, que esta en .gitignore.
+        Al ejecutar se pasa al proceso por entorno, nunca como argumento (los argumentos se ven con <code>ps</code>).</p>` : ''}`;
+}
+function wireSeparator(root) {
+  root.querySelector('#sep-backend').addEventListener('change', e => { separator = e.target.value; repaintPanel('separate'); });
+  const eye = root.querySelector('#sep-eye');
+  if (eye) eye.addEventListener('click', () => {
+    const i = root.querySelector('#sep-token');
+    i.type = i.type === 'password' ? 'text' : 'password';
+  });
+  const save = root.querySelector('#sep-save');
+  if (save) save.addEventListener('click', async () => {
+    const token = root.querySelector('#sep-token').value.trim();
+    if (!token) { toast('Pega el token primero.', 'bad'); return; }
+    try {
+      tokenInfo = await post('/api/secrets', { mvsep_token: token, remember: root.querySelector('#sep-remember').checked });
+      toast('Token guardado.', 'ok');
+      repaintPanel('separate');
+    } catch (e) { toast(e.message, 'bad'); }
+  });
+}
+
+/* --- verify: medida de REAPER --- */
+let verifyStats = null;
+let verifyReady = false;
+function verifyHtml() {
+  const s = verifyStats;
+  let state = '<span class="hint">comprobando…</span>';
+  if (s && !s.found) {
+    state = '<div class="hint bad">Todavia no has medido. Sin la medida este paso se omite.</div>';
+  } else if (s) {
+    state = `<div class="hint ${s.stale_vs_project ? 'warnc' : 'ok'}">
+      Ultima medida: ${escapeHtml(s.modified)} (hace ${s.age_minutes} min)
+      ${s.stale_vs_project ? '<br><b>Has guardado el proyecto despues de medir: vuelve a medir.</b>' : ''}
+      <br><code>${escapeHtml(s.path)}</code></div>`;
+  }
+  return `
+    <h4>Antes, mide en REAPER</h4>
+    <ol class="hint" style="padding-left:1.1rem">
+      <li>Abre el proyecto en REAPER.</li>
+      <li>Selecciona las pistas <b>ES VOX</b> y <b>EN VOX</b>.</li>
+      <li>Ejecuta la accion <b>«Calculate loudness of selected tracks via dry run render»</b>.</li>
+      <li>Vuelve aqui y ejecuta este paso.</li>
+    </ol>
+    ${state}
+    <div class="row">
+      ${current && current.has_verify
+        ? `<a href="/api/episodes/${encodeURIComponent(current.code)}/verify.html" target="_blank">ver ultimo informe ↗</a>`
+        : '<span class="hint" style="margin:0">Aun no hay informe.</span>'}
+    </div>`;
+}
+function wireVerify() { /* sin interaccion propia: se ejecuta con el boton del rango */ }
+
+async function refreshVerifyPanel() {
+  if (!current) return;
+  const inRange = STEPS.slice(rangeFrom, rangeTo + 1).some(s => s.key === 'verify');
+  if (!inRange) { verifyReady = false; paintRunBar(); return; }
+  try {
+    verifyStats = await api(`/api/episodes/${encodeURIComponent(current.code)}/render-stats`);
+  } catch (e) { verifyStats = { found: false }; }
+  verifyReady = !!(verifyStats && verifyStats.found);
+  const panel = $('verify-panel');
+  if (panel) { panel.innerHTML = verifyHtml(); }
+  paintRunBar();
+}
+
+/* --- mux: nombre del fichero final --- */
+let finalName = '';
+function nameHtml() {
+  const preview = finalName.trim()
+    ? `${escapeHtml(finalName.trim())} - [1080p AVC] [FLAC ENG SPA] [Subs ENG].mkv`
+    : '<i>se conserva el nombre del Blu-ray tal cual</i>';
+  return `
+    <h4>Nombre del fichero final</h4>
+    <div class="row">
+      <input type="text" id="final-name" style="flex:1;min-width:20rem" value="${escapeHtml(finalName)}"
+             placeholder="Las aventuras de Sherlock Holmes (1984) S02E06 El problema final">
+    </div>
+    <p class="hint">Escribe todo lo que va delante del guion. Los corchetes se añaden solos con lo que se
+      detecte del video y de las pistas.</p>
+    <p class="hint mono" id="name-preview">${preview}</p>`;
+}
+function wireName(root) {
+  const input = root.querySelector('#final-name');
+  input.addEventListener('input', () => {
+    finalName = input.value;
+    root.querySelector('#name-preview').innerHTML = finalName.trim()
+      ? `${escapeHtml(finalName.trim())} - [1080p AVC] [FLAC ENG SPA] [Subs ENG].mkv`
+      : '<i>se conserva el nombre del Blu-ray tal cual</i>';
+  });
+}
+
+// ---------------------------------------------------------------- ejecucion
+$('run-btn').addEventListener('click', async () => {
+  if (!current) return;
+  try {
+    const { job_id } = await post('/api/run', {
+      episode: current.path,
+      from_step: STEPS[rangeFrom].key,
+      to_step: STEPS[rangeTo].key,
+      separator,
+      force: $('force').checked,
+      final_name: finalName,
+    });
+    liveStates = {};
+    jobRunning = true;
+    $('log').textContent = '';
+    $('log-wrap').open = false;
+    setStatus('ejecutando…', '');
+    paintRunBar();
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = setInterval(() => pollJob(job_id), 1200);
+  } catch (e) { toast(e.message, 'bad'); }
 });
 
-document.getElementById('run-btn').addEventListener('click', async () => {
-  if (!currentEpisode) return;
-  const body = {
-    episode: currentEpisode,
-    from_step: document.getElementById('from_step').value,
-    to_step: document.getElementById('to_step').value,
-    separator: document.getElementById('separator').value,
-    force: document.getElementById('force').checked,
-    final_name: document.getElementById('final_name').value,
-  };
-  const res = await fetch('/api/run', {
-    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
-  });
-  const { job_id } = await res.json();
-  startJob(job_id);
-});
+function setStatus(text, kind) {
+  const el = $('run-status');
+  el.style.display = '';
+  el.textContent = text;
+  el.className = 'chip ' + (kind || '');
+}
 
 async function pollJob(jobId) {
-  const res = await fetch(`/api/jobs/${jobId}`);
-  const data = await res.json();
-  const log = document.getElementById('log');
-  log.textContent = data.log;
-  log.scrollTop = log.scrollHeight;
-  const status = document.getElementById('status');
-  if (data.status === 'running') {
-    status.textContent = 'ejecutando...'; status.className = 'status-running';
-  } else {
-    status.textContent = data.status === 'done' ? 'terminado' : 'error';
-    status.className = data.status === 'done' ? 'status-done' : 'status-error';
-    clearInterval(pollTimer);
-    loadEpisodes();
-    refreshVerifyBox();
+  let data;
+  try {
+    data = await api(`/api/jobs/${jobId}`);
+  } catch (e) {
+    clearInterval(pollTimer); pollTimer = null; jobRunning = false;
+    setStatus('se ha perdido el job', 'bad'); paintRunBar(); return;
   }
+
+  for (const ev of data.events) {
+    liveStates[ev.step] = ev.state === 'running'
+      ? { state: 'running' }
+      : { state: 'done', outcome: ev.outcome, seconds: ev.seconds, reason: ev.reason };
+  }
+  renderTimeline();
+
+  $('log').textContent = data.log;
+  $('log').scrollTop = $('log').scrollHeight;
+
+  if (data.status === 'running') { setStatus(`ejecutando… ${fmtSeconds(data.seconds)}`, ''); return; }
+
+  clearInterval(pollTimer);
+  pollTimer = null;
+  jobRunning = false;
+  if (data.status === 'done') {
+    setStatus(`terminado en ${fmtSeconds(data.seconds)}`, 'ok');
+    toast(`Listo en ${fmtSeconds(data.seconds)}.`, 'ok');
+  } else {
+    setStatus('error', 'bad');
+    toast('Ha fallado. Mira la salida.', 'bad');
+    $('log-wrap').open = true;
+  }
+  await loadEpisodes();
+  if (current) current = episodes.find(e => e.path === current.path) || current;
+  renderTimeline();
+  refreshVerifyPanel();
 }
 
-loadEpisodes();
-setInterval(loadEpisodes, 10000);
+// ---------------------------------------------------------------- atajos
+document.addEventListener('keydown', (e) => {
+  if (e.target.matches('input, select, textarea')) return;
+  if (e.key === 'Enter' && current && !$('run-btn').disabled) $('run-btn').click();
+  if (e.key === 'r') loadEpisodes();
+});
+
+// ---------------------------------------------------------------- arranque
+(async function boot() {
+  STEPS = await api('/api/steps');
+  try { tokenInfo = await api('/api/secrets'); } catch (e) {}
+  await loadRoot();
+  await loadEpisodes();
+  openFromHash();
+  setInterval(() => { if (!pollTimer) loadEpisodes(); }, 15000);
+})();
 </script>
 </body>
 </html>

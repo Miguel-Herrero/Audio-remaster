@@ -21,3 +21,6 @@ htmlcov/
 # Artefactos de REAPER
 *.reapeaks
 *.rpp-bak
+
+# Secretos locales (token de MVSEP). Ver remaster/web/envfile.py
+.env

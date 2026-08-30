@@ -15,6 +15,7 @@ from rich.console import Console
 from rich.table import Table
 
 from .doctor import run_all as doctor_run_all
+from .events import EventLog
 from .layout import EpisodeLayout
 from .manifest import Manifest
 from .naming import build_final_filename
@@ -33,14 +34,15 @@ from .steps.render import REAPER_BINARY, render_step
 from .steps.retime import retime_step
 from .steps.verify import STATUS_DOUBLE_GAIN, VerifyError, build_actions, format_timecode, verify_project, write_report
 from .steps.separate import LocalSeparatorBackend, MvsepSeparatorBackend, SeparatorBackend, separate_all
+from .steps_meta import step_keys
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 console = Console()
 
-STEP_ORDER = [
-    "ingest", "extract", "retime", "separate", "align",
-    "loudness", "project", "render", "mux", "remux4k",
-]
+# El orden sale de steps_meta.py, que es donde vive tambien la
+# descripcion de cada paso: asi no se puede añadir uno aqui y olvidarse
+# de explicar que hace.
+STEP_ORDER = step_keys()
 
 DEFAULT_MODEL_DIR = Path.home() / ".cache" / "remaster" / "models"
 
@@ -105,13 +107,63 @@ def _print_sources_table(sources: ClassifiedSources) -> None:
     console.print(table)
 
 
-def _report_step(label: str, result) -> None:
+def _begin(step: str, events: EventLog, suffix: str = "") -> None:
+    """Cabecera del paso, en la consola y en la traza a la vez."""
+    console.print(f"\n[bold]{step}[/bold]{suffix}")
+    events.start(step)
+
+
+def _finish(events: EventLog) -> None:
+    events.close()
+    console.print("\n[green]Listo.[/green]")
+
+
+def _run_verify_in_pipeline(layout: EpisodeLayout, profile: Profile) -> str | None:
+    """`verify` dentro de un `run`. Devuelve el motivo si se omite.
+
+    Version corta: escribe el informe y enumera los titulares. El detalle
+    (tablas de global, envolvente, items) se queda para `remaster verify`,
+    que es donde vas cuando quieres mirarlo de verdad.
+    """
+    if not layout.rpp_edit.exists():
+        return "todavia no hay proyecto que revisar"
+
+    stats_path = newest_render_stats(stats_search_dirs(layout))
+    if stats_path is None:
+        return (
+            "sin medida de REAPER — abre el proyecto, selecciona ES VOX y EN VOX, ejecuta "
+            "«Calculate loudness of selected tracks via dry run render» y repite con --from verify --to verify"
+        )
+
+    try:
+        report = verify_project(layout, profile, stats_path)
+    except VerifyError as exc:
+        return str(exc)
+
+    actions = build_actions(report)
+    if not actions:
+        console.print("  [green]nada que revisar: el castellano cuadra con el ingles[/green]")
+    for n, action in enumerate(actions, start=1):
+        colour = {"alta": "red", "media": "yellow"}.get(action.urgency, "cyan")
+        console.print(f"  [{colour}]{n}. {action.title}[/{colour}]", highlight=False)
+
+    _, html_path = write_report(layout, report)
+    console.print(f"  informe: [dim]{html_path}[/dim]")
+    return None
+
+
+def _report_step(label: str, result, events: EventLog | None = None) -> None:
     if result is None:
         console.print(f"  {label}: [dim]omitido[/dim]")
+        outcome = "skipped"
     elif result.ran:
         console.print(f"  {label}: [yellow]ejecutado[/yellow]")
+        outcome = "ran"
     else:
         console.print(f"  {label}: [dim]sin cambios (no-op)[/dim]")
+        outcome = "noop"
+    if events is not None:
+        events.note(outcome)
 
 
 @app.command()
@@ -170,6 +222,10 @@ def run(
     to_step: str = typer.Option("mux", "--to", help=f"Paso final: {STEP_ORDER}"),
     force: bool = typer.Option(False, "--force", help="Re-ejecutar aunque el manifiesto diga que esta al dia"),
     profile_path: Optional[Path] = typer.Option(None, "--profile", help="Ruta a un perfil TOML (por defecto profiles/sh1984.toml)"),
+    events_path: Optional[Path] = typer.Option(
+        None, "--events",
+        help="Escribir la traza de pasos en NDJSON en este fichero (lo usa la UI para dibujar el progreso)",
+    ),
     ffmpeg_path: str = typer.Option("ffmpeg", help="Ruta a ffmpeg"),
     mkvmerge_path: str = typer.Option("mkvmerge", help="Ruta a mkvmerge"),
     reaper_binary: str = typer.Option(REAPER_BINARY, help="Ruta al binario de REAPER"),
@@ -232,6 +288,7 @@ def run(
     layout.ensure_dirs()
     manifest = Manifest(layout.manifest_path)
     profile = load_profile(profile_path)
+    events = EventLog(events_path)
 
     overrides = _build_overrides(es_source, es_track, en_source, en_track, ja_track, video_source)
     try:
@@ -244,49 +301,49 @@ def run(
     _print_sources_table(classified)
 
     if hi == STEP_ORDER.index("ingest"):
-        console.print("\n[green]Listo.[/green]")
+        _finish(events)
         return
 
     # --- extract ---
     if runs("extract"):
-        console.print("\n[bold]extract[/bold]")
+        _begin("extract", events)
         outcome = extract_all(classified, layout, manifest, ffmpeg_path=ffmpeg_path, force=force)
-        _report_step("es", outcome.es)
-        _report_step("en", outcome.en)
-        _report_step("ja", outcome.ja)
+        _report_step("es", outcome.es, events)
+        _report_step("en", outcome.en, events)
+        _report_step("ja", outcome.ja, events)
     elif wants("retime") or wants("separate"):
         _expect(layout.es_source, "extract")
         _expect(layout.en_source, "extract")
 
     if hi == STEP_ORDER.index("extract"):
-        console.print("\n[green]Listo.[/green]")
+        _finish(events)
         return
 
     # --- retime ---
     needs_retime = classified.dvd_video is not None and classified.dvd_video.frame_rate != classified.target_fps
     if runs("retime"):
-        console.print("\n[bold]retime[/bold]")
+        _begin("retime", events)
         es_for_separation, retime_result = retime_step(classified, layout, manifest, ffmpeg_path=ffmpeg_path, force=force)
         if retime_result is None:
             console.print(f"  DVD ya esta a {classified.target_fps} fps, no hace falta retimear.")
         else:
-            _report_step(es_for_separation.name, retime_result)
+            _report_step(es_for_separation.name, retime_result, events)
     else:
         es_for_separation = layout.es_retimed(classified.target_fps) if needs_retime else layout.es_source
         if wants("separate"):
             _expect(es_for_separation, "retime")
 
     if hi == STEP_ORDER.index("retime"):
-        console.print("\n[green]Listo.[/green]")
+        _finish(events)
         return
 
     # --- separate ---
     if runs("separate"):
-        console.print(f"\n[bold]separate[/bold] (backend={separator})")
+        _begin("separate", events, suffix=f" (backend={separator})")
         backend = _build_separator_backend(separator, profile, mvsep_token, model_dir)
         sep_outcome = separate_all(es_for_separation, layout.en_source, layout, manifest, backend, force=force)
-        _report_step("es (vocals+instrumental)", sep_outcome.es)
-        _report_step("en (vocals+instrumental)", sep_outcome.en)
+        _report_step("es (vocals+instrumental)", sep_outcome.es, events)
+        _report_step("en (vocals+instrumental)", sep_outcome.en, events)
         es_vocals, es_instrumental = sep_outcome.es_vocals, sep_outcome.es_instrumental
         en_vocals, en_instrumental = sep_outcome.en_vocals, sep_outcome.en_instrumental
     else:
@@ -296,20 +353,20 @@ def run(
         en_instrumental = _expect(layout.en_instrumental, "separate")
 
     if hi == STEP_ORDER.index("separate"):
-        console.print("\n[green]Listo.[/green]")
+        _finish(events)
         return
 
     # --- align ---
     if runs("align"):
-        console.print("\n[bold]align[/bold]")
+        _begin("align", events)
         if sync_offset is not None:
             from .steps.align import manual_align
             align_result, align_step_result = manual_align(sync_offset, sync_drift, layout, manifest, force=force)
-            _report_step("sync (calibracion manual)", align_step_result)
+            _report_step("sync (calibracion manual)", align_step_result, events)
             console.print(f"  offset={align_result.offset_seconds:+.3f}s  drift={align_result.drift_slope:+.5f}s/s")
         else:
             align_result, align_step_result = run_align(es_vocals, en_vocals, layout, manifest, force=force)
-            _report_step("sync", align_step_result)
+            _report_step("sync", align_step_result, events)
             console.print(
                 f"  offset={align_result.offset_seconds:+.3f}s  drift={align_result.drift_slope:+.5f}s/s  "
                 f"confianza={align_result.confidence:.2f}"
@@ -329,16 +386,16 @@ def run(
         )
 
     if hi == STEP_ORDER.index("align"):
-        console.print("\n[green]Listo.[/green]")
+        _finish(events)
         return
 
     # --- loudness ---
     if runs("loudness"):
-        console.print("\n[bold]loudness[/bold]")
+        _begin("loudness", events)
         loudness_result, loudness_step_result = loudness_step(
             es_vocals, en_vocals, en_instrumental, layout, manifest, profile.loudness, align_result, force=force,
         )
-        _report_step("lufs", loudness_step_result)
+        _report_step("lufs", loudness_step_result, events)
         console.print(
             f"  ganancia global={loudness_result.global_gain_db:+.2f}dB  "
             f"puntos de escena={len(loudness_result.scene_vol_points)}"
@@ -356,12 +413,12 @@ def run(
         )
 
     if hi == STEP_ORDER.index("loudness"):
-        console.print("\n[green]Listo.[/green]")
+        _finish(events)
         return
 
     # --- project ---
     if runs("project"):
-        console.print("\n[bold]project[/bold]")
+        _begin("project", events)
         try:
             project_result = build_project_step(
                 classified, layout, profile,
@@ -371,7 +428,7 @@ def run(
         except ProjectEditedError as exc:
             console.print(f"\n[red]{exc}[/red]")
             raise typer.Exit(1) from exc
-        _report_step(layout.rpp_edit.name, project_result)
+        _report_step(layout.rpp_edit.name, project_result, events)
         from .steps.project import MIN_TOTAL_DRIFT_TO_SEGMENT_S
         total_drift = abs(align_result.drift_slope) * probe_file(en_vocals).duration
         if total_drift >= MIN_TOTAL_DRIFT_TO_SEGMENT_S:
@@ -383,21 +440,41 @@ def run(
         _expect(layout.rpp_edit, "project")
 
     if hi == STEP_ORDER.index("project"):
-        console.print("\n[green]Listo.[/green]")
+        _finish(events)
+        return
+
+    # --- verify ---
+    # Va aqui porque es donde de verdad cae: entre generar el proyecto y
+    # renderizarlo esta el rato en el que lo editas a mano, y esto revisa
+    # justo eso. Nunca corta el pipeline: es un informe, no una puerta.
+    # Sin medida de REAPER se omite en vez de dar un analisis a medias
+    # — el analisis parcial sigue disponible en `remaster verify --no-stats`,
+    # pero pedirlo tiene que ser una decision, no el silencio por defecto.
+    if runs("verify"):
+        _begin("verify", events)
+        reason = _run_verify_in_pipeline(layout, profile)
+        if reason:
+            console.print(f"  [dim]omitido — {reason}[/dim]")
+            events.close(outcome="skipped", reason=reason)
+        else:
+            events.note("ran")
+
+    if hi == STEP_ORDER.index("verify"):
+        _finish(events)
         return
 
     # --- render ---
     if runs("render"):
-        console.print("\n[bold]render[/bold]")
+        _begin("render", events)
         expected_duration = probe_file(en_vocals).duration
         render_result = render_step(
             layout, expected_duration, manifest, profile, reaper_binary=reaper_binary, force=force)
-        _report_step(layout.es_reconstructed.name, render_result)
+        _report_step(layout.es_reconstructed.name, render_result, events)
     else:
         _expect(layout.es_reconstructed, "render")
 
     if hi == STEP_ORDER.index("render"):
-        console.print("\n[green]Listo.[/green]")
+        _finish(events)
         return
 
     # --- mux ---
@@ -416,7 +493,7 @@ def run(
     output_file = out_dir_resolved / output_filename
 
     if runs("mux"):
-        console.print("\n[bold]mux[/bold]")
+        _begin("mux", events)
         mux_title = title
         if mux_title is None:
             if final_name:
@@ -430,22 +507,23 @@ def run(
             classified.bluray_container, layout.en_source, layout.es_reconstructed, ja_flac,
             output_file, mux_title, profile, manifest, mkvmerge_path=mkvmerge_path, force=force,
         )
-        _report_step(output_file.name, mux_result)
+        _report_step(output_file.name, mux_result, events)
     else:
         _expect(output_file, "mux")
 
     if hi == STEP_ORDER.index("mux"):
-        console.print("\n[green]Listo.[/green]")
+        _finish(events)
         return
 
     # --- remux4k (opcional) ---
     if not classified.remaster4k:
         console.print("\n[bold]remux4k[/bold]")
         console.print("  [dim]sin fuente 4K en 00_sources — omitido[/dim]")
-        console.print("\n[green]Listo.[/green]")
+        events.skip("remux4k", "sin fuente 4K en 00_sources")
+        _finish(events)
         return
 
-    console.print("\n[bold]remux4k[/bold]")
+    _begin("remux4k", events)
     if final_name:
         output_4k = out_dir_resolved / build_final_filename(
             final_name,
@@ -458,9 +536,9 @@ def run(
         output_file, classified.remaster4k.video.path, classified.remaster4k.video.stream_index,
         classified.remaster4k.subtitle, output_4k, manifest, mkvmerge_path=mkvmerge_path, force=force,
     )
-    _report_step(output_4k.name, remux_result)
+    _report_step(output_4k.name, remux_result, events)
 
-    console.print("\n[green]Listo.[/green]")
+    _finish(events)
 
 
 def run_calibration(
@@ -560,9 +638,14 @@ def status(episode: Path = typer.Argument(..., help="Carpeta del episodio")) -> 
 def ui(
     host: str = typer.Option("127.0.0.1", help="Host de la UI local"),
     port: int = typer.Option(8765, help="Puerto de la UI local"),
-    movies_dir: Optional[Path] = typer.Option(None, "--movies-dir", help="Carpeta base con las carpetas de episodio (por defecto ~/Movies)"),
+    movies_dir: Optional[Path] = typer.Option(None, "--movies-dir", help="Carpeta base de partida (opcional: tambien se puede elegir desde la UI)"),
 ) -> None:
-    """Arranca la UI web local (necesita el extra 'ui': uv sync --extra ui)."""
+    """Arranca la UI web local (necesita el extra 'ui': uv sync --extra ui).
+
+    La carpeta base se puede cambiar desde el navegador y se recuerda,
+    asi que `--movies-dir` y `REMASTER_MOVIES_DIR` solo fijan por donde
+    empieza la primera vez.
+    """
     try:
         import uvicorn
     except ImportError as exc:

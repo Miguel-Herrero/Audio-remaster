@@ -3,6 +3,82 @@
 Formato basado en [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versionado con [SemVer](https://semver.org/lang/es/).
 
+## [2.2.0] - 2026-08-31
+
+### Added
+- La UI web se rehace entera. La anterior era un andamio: una tabla, dos
+  desplegables con los nombres tecnicos de los pasos y un `<pre>` con el log
+  crudo. No se podia saber que iba a hacer «Ejecutar» sin haber escrito el
+  pipeline.
+- **Timeline** como pieza central: un nodo numerado por paso, unidos por una
+  linea punteada que se vuelve solida al completarse, de modo que el
+  recorrido hace de barra de progreso. Cada nodo lleva su estado (pendiente,
+  en curso, hecho, sin cambios, omitido con motivo, error), su duracion, que
+  hace el paso y **que salvaguarda tiene**. El rango a ejecutar se elige
+  pulsando nodos (clic = uno; mayusculas = rango), en vez de con dos
+  desplegables.
+- El estado inicial sale del manifiesto, asi que el timeline esta poblado
+  nada mas abrir el episodio. Un paso con varias entradas (`extract:es`,
+  `extract:en`, `separate:en`…) cuenta como uno solo y suma duraciones;
+  `ingest` y `verify`, que no escriben en el manifiesto, se deducen de lo que
+  dejan en disco.
+- **La carpeta base se elige desde el navegador** (`GET`/`POST /api/root`) y se
+  recuerda entre arranques en `~/.config/remaster/ui.json`, junto con las
+  ultimas usadas. Se puede escribir la ruta o arrastrar la carpeta desde el
+  Finder. Ya no hace falta `REMASTER_MOVIES_DIR` ni `--movies-dir`, que pasan
+  a fijar solo por donde se empieza la primera vez.
+- **El token de MVSEP se mete en la UI**, no en una variable de entorno. Se lee
+  de `.env` al arrancar y se puede guardar ahi con un check. La API nunca
+  devuelve el token, solo si esta puesto y de donde sale; al ejecutar se pasa
+  al subproceso por entorno y nunca por argumentos, que `ps` enseña a
+  cualquiera. Nuevo `remaster/web/envfile.py`: escribir una clave preserva
+  comentarios y orden del fichero. `.env` va a `.gitignore`.
+- **Paneles contextuales**: la calibracion manual y el re-analisis dejan de ser
+  secciones sueltas siempre visibles y aparecen bajo el nodo del paso al que
+  pertenecen, solo cuando ese paso esta en el rango elegido. La calibracion
+  ademas solo sale si `align` ya ha corrido — antes no hay nada que corregir.
+  El nombre del fichero final (`--name`) sale bajo `mux`, con vista previa.
+- **Las salvaguardas se ven antes de pulsar.** Se extrae de `_guard_hand_edits`
+  un `project_hand_edited()` reutilizable; la lista de episodios lo expone y
+  la UI marca «editado a mano». Si el rango incluye `project` con el `.RPP`
+  tocado, el nodo se pinta en rojo con la alternativa, en vez de que te
+  enteres por el error al intentarlo.
+- `remaster run --events <fichero>`: traza NDJSON con una linea por transicion
+  de paso (`remaster/events.py`). La UI la usa para el timeline en vez de
+  parsear la salida de `rich`, que esta pensada para leerse, no para
+  maquinas. Sin la opcion es un no-op y la CLI se comporta igual que antes.
+- `remaster/steps_meta.py`: que hace cada paso y que protege, en una linea.
+  Fuente unica — `STEP_ORDER` se deriva de ahi, asi que no se puede añadir un
+  paso sin explicarlo. Se sirve por `GET /api/steps`.
+- Los episodios pasan de filas de tabla a tarjetas con anillo de progreso y
+  distintivos de lo que hay hecho («editado a mano», informe, MKV). Los mismos
+  distintivos, con enlaces al informe y al grafico de sync, encabezan el
+  episodio abierto.
+- El rango que se propone al abrir un episodio es «lo que falta»; si no falta
+  nada, `verify` a secas, que es el bucle de trabajo real (editar en REAPER ⇄
+  revisar). Antes se seleccionaban los once pasos y se abrian los cuatro
+  paneles a la vez, que es el amontonamiento del que se venia.
+- Tema claro/oscuro con interruptor (oscuro por defecto), enlace directo a un
+  episodio por `#codigo`, atajos de teclado, avisos al terminar y textos
+  utiles cuando no hay nada que enseñar.
+- `tests/test_ui_contract.py`: aqui no hay tests de JS, pero los puntos donde
+  el HTML y el paquete acuerdan un vocabulario si se comprueban leyendo el
+  fichero, y son justo donde las cosas se rompen sin fallar. Todo `outcome`
+  que emita la traza tiene que tener estado visual, y todo estado visual su
+  glifo y su regla CSS.
+
+### Changed
+- **`verify` pasa a ser un paso mas**, entre `project` y `render`, que es
+  justo donde cae: entre generar el proyecto y renderizarlo esta el rato en
+  el que lo editas a mano. Nunca corta el pipeline — es un informe, no una
+  puerta. Sin medida de REAPER se omite diciendo por que, en vez de dar un
+  analisis parcial sin avisar; el analisis parcial sigue estando en
+  `remaster verify --no-stats`, pero pedirlo es ahora una decision explicita.
+  Desaparece de la UI el check «sin medir».
+- El log de la UI ya no sale con codigos ANSI en crudo (`[1mverify[0m`):
+  al subproceso se le pide que no coloree y se le da mas ancho que los 80
+  que asume al no hablar con un terminal.
+
 ## [2.1.0] - 2026-08-30
 
 ### Added
