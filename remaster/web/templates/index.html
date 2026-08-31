@@ -82,6 +82,15 @@ label { font-size: .9rem; }
   display: flex; gap: .75rem; align-items: center; flex-wrap: wrap;
 }
 .brand { font-weight: 650; letter-spacing: -.02em; margin-right: .4rem; }
+.tabs { display: flex; gap: .15rem; }
+.tab {
+  background: none; border: 1px solid transparent; color: var(--fg-dim);
+  padding: .3rem .7rem; border-radius: var(--radius); font-size: .88rem;
+}
+.tab:hover { color: var(--fg); }
+.tab[aria-current="page"] {
+  color: var(--fg); background: var(--bg-raised); border-color: var(--line);
+}
 .brand span { color: var(--fg-faint); font-weight: 400; }
 .rootbox { display: flex; align-items: center; gap: .5rem; flex: 1; min-width: 260px; }
 #root-input { flex: 1; min-width: 180px; font-family: var(--mono); font-size: .82rem; }
@@ -92,6 +101,45 @@ label { font-size: .9rem; }
 }
 .chip.ok { color: var(--accent); border-color: color-mix(in oklab, var(--accent) 45%, transparent); }
 .chip.bad { color: var(--error); border-color: color-mix(in oklab, var(--error) 45%, transparent); }
+
+/* ---------- laboratorio de separacion ---------- */
+.lab { display: grid; gap: 1.1rem; }
+.lab-field { display: grid; gap: .3rem; }
+.lab-field > label { font-size: .82rem; color: var(--fg-dim); }
+.lab-field input[type=text] { font-family: var(--mono); font-size: .82rem; width: 100%; }
+.lab-field input.drop { outline: 2px dashed var(--accent); outline-offset: 2px; }
+.models { display: grid; gap: .4rem; }
+.model {
+  display: grid; grid-template-columns: 1.2rem 1fr auto; gap: .6rem;
+  align-items: start; padding: .6rem .75rem; border: 1px solid var(--line-soft);
+  border-radius: var(--radius); background: var(--bg-raised); cursor: pointer;
+  transition: border-color .15s, background .15s;
+}
+.model:hover { border-color: var(--line); }
+.model[aria-checked="true"] { border-color: var(--accent); background: var(--bg-sunken); }
+.model.off { opacity: .55; }
+/* El boton de descargar es lo unico accionable de una fila apagada: si
+   heredara el atenuado, la unica salida de ese estado pareceria inerte. */
+.model.off [data-get] { opacity: 1.7; border-color: var(--line); }
+.model-mark { color: var(--fg-faint); font-size: 1rem; line-height: 1.3; }
+.model[aria-checked="true"] .model-mark { color: var(--accent); }
+.model-name { font-weight: 550; }
+.model-stems { font-family: var(--mono); font-size: .76rem; color: var(--fg-dim); margin-top: .1rem; }
+.model-note { font-size: .8rem; color: var(--fg-faint); margin-top: .25rem; line-height: 1.45; }
+.model-side { display: flex; flex-direction: column; align-items: flex-end; gap: .3rem; }
+.langs { display: flex; gap: .3rem; flex-wrap: wrap; margin-top: .45rem; }
+.lang {
+  font-size: .78rem; padding: .18rem .55rem; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--fg-dim);
+}
+.lang[aria-checked="true"] { color: var(--accent); border-color: var(--accent); }
+.lang.off { opacity: .5; }
+.lab-opts { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; }
+.lab-preview {
+  font-family: var(--mono); font-size: .78rem; color: var(--fg-dim);
+  background: var(--bg-sunken); border: 1px solid var(--line-soft);
+  border-radius: var(--radius); padding: .55rem .7rem; word-break: break-all;
+}
 
 /* ---------- tarjetas de episodio ---------- */
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: .75rem; }
@@ -236,7 +284,11 @@ table.mini th { color: var(--fg-faint); font-weight: 500; }
 <header class="topbar">
   <div class="topbar-inner">
     <div class="brand">remaster<span> · audio</span></div>
-    <div class="rootbox">
+    <nav class="tabs">
+      <button class="tab" data-view="episodes" aria-current="page">Episodios</button>
+      <button class="tab" data-view="separar">Separar</button>
+    </nav>
+    <div class="rootbox" id="rootbox">
       <input type="text" id="root-input" spellcheck="false"
              placeholder="/ruta/a/tus/episodios — o arrastra la carpeta aqui">
       <span class="chip" id="root-chip">…</span>
@@ -247,6 +299,7 @@ table.mini th { color: var(--fg-faint); font-weight: 500; }
 </header>
 
 <div class="wrap">
+<div id="view-episodes">
   <div id="episodes"></div>
 
   <section class="runner" id="runner" style="display:none">
@@ -260,6 +313,7 @@ table.mini th { color: var(--fg-faint); font-weight: 500; }
 
     <div class="runbar">
       <button class="primary" id="run-btn">Ejecutar</button>
+      <button class="ghost" id="run-cancel" style="display:none">Cancelar</button>
       <span class="what" id="run-what"></span>
       <label style="margin-left:auto"><input type="checkbox" id="force"> rehacer aunque este al dia</label>
       <span class="chip" id="run-status" style="display:none"></span>
@@ -270,6 +324,52 @@ table.mini th { color: var(--fg-faint); font-weight: 500; }
       <pre id="log"></pre>
     </details>
   </section>
+</div>
+
+<div id="view-separar" style="display:none">
+  <div class="lab">
+    <div class="lab-field">
+      <label for="sep-input">Archivo de audio</label>
+      <input type="text" id="sep-input" spellcheck="false"
+             placeholder="/ruta/al/audio.flac — o arrastra el fichero aqui">
+    </div>
+
+    <div class="lab-field">
+      <label for="sep-out">Carpeta de salida</label>
+      <input type="text" id="sep-out" spellcheck="false">
+    </div>
+
+    <div class="lab-field">
+      <label>Modelo</label>
+      <div class="models" id="sep-models" role="radiogroup"></div>
+    </div>
+
+    <div class="lab-opts">
+      <label>Formato
+        <select id="sep-format">
+          <option value="flac24">FLAC 24 bits</option>
+          <option value="wav32">WAV 32 bits float</option>
+        </select>
+      </label>
+      <label><input type="checkbox" id="sep-inst"> invertir para sacar el complementario</label>
+      <label><input type="checkbox" id="sep-tta"> TTA (triplica el tiempo)</label>
+      <label><input type="checkbox" id="sep-cpu"> forzar CPU</label>
+    </div>
+
+    <div class="lab-preview" id="sep-preview">elige un archivo y un modelo</div>
+
+    <div class="runbar">
+      <button class="primary" id="sep-btn">Separar</button>
+      <button class="ghost" id="sep-cancel" style="display:none">Cancelar</button>
+      <span class="chip" id="sep-status" style="display:none"></span>
+    </div>
+
+    <details id="sep-log-wrap">
+      <summary>ver salida</summary>
+      <pre id="sep-log"></pre>
+    </details>
+  </div>
+</div>
 </div>
 
 <div id="toasts"></div>
@@ -290,6 +390,15 @@ let jobRunning = false;
 // 1.2s mientras corre un job no te quita el foco de un campo a medio
 // escribir. Quien cambia el contenido de un panel lo invalida a mano.
 let panelCache = {};
+
+// Vista "Separar": catalogo de MSST y lo elegido ahora mismo.
+let msstInfo = null;
+let msstModels = [];
+let sepModel = null;
+let sepLang = null;
+let sepJob = null;
+let sepTimer = null;
+let runJob = null;
 
 const $ = (id) => document.getElementById(id);
 const GLYPH = { pending: '○', running: '◐', done: '✓', noop: '·', skipped: '⊘', error: '✕' };
@@ -371,33 +480,37 @@ async function setRoot(path) {
 $('root-input').addEventListener('change', (e) => setRoot(e.target.value));
 $('root-recent').addEventListener('change', (e) => { if (e.target.value) setRoot(e.target.value); });
 
-// Arrastrar una carpeta del Finder. Chrome/Safari en macOS ponen el
-// `file://` en text/uri-list; si el navegador solo da el nombre, se
-// rellena con lo que haya y se dice que falta la ruta, en vez de fingir
-// que ha funcionado.
-const rootInput = $('root-input');
-['dragenter', 'dragover'].forEach(ev => rootInput.addEventListener(ev, (e) => {
-  e.preventDefault(); rootInput.classList.add('drop');
-}));
-['dragleave', 'drop'].forEach(ev => rootInput.addEventListener(ev, () => rootInput.classList.remove('drop')));
-rootInput.addEventListener('drop', (e) => {
-  e.preventDefault();
-  const dt = e.dataTransfer;
-  let path = (dt.getData('text/uri-list') || '').split('\n').find(l => l && !l.startsWith('#')) || '';
-  if (!path) path = dt.getData('text/plain') || '';
-  if (path.startsWith('file://')) {
-    try { path = decodeURIComponent(new URL(path).pathname); } catch (err) { path = ''; }
-  }
-  if (path) { path = path.replace(/\/$/, ''); setRoot(path); return; }
+// Arrastrar del Finder. Chrome/Safari en macOS ponen el `file://` en
+// text/uri-list; si el navegador solo da el nombre, se rellena con lo que
+// haya y se avisa, en vez de fingir que ha funcionado. Lo usan tanto la
+// carpeta base como el fichero a separar.
+function wireDrop(input, onPath, onNameOnly) {
+  ['dragenter', 'dragover'].forEach(ev => input.addEventListener(ev, (e) => {
+    e.preventDefault(); input.classList.add('drop');
+  }));
+  ['dragleave', 'drop'].forEach(ev =>
+    input.addEventListener(ev, () => input.classList.remove('drop')));
+  input.addEventListener('drop', (e) => {
+    e.preventDefault();
+    const dt = e.dataTransfer;
+    let path = (dt.getData('text/uri-list') || '').split('\n').find(l => l && !l.startsWith('#')) || '';
+    if (!path) path = dt.getData('text/plain') || '';
+    if (path.startsWith('file://')) {
+      try { path = decodeURIComponent(new URL(path).pathname); } catch (err) { path = ''; }
+    }
+    if (path) { onPath(path.replace(/\/$/, '')); return; }
 
-  const item = dt.items && dt.items[0];
-  const entry = item && item.webkitGetAsEntry && item.webkitGetAsEntry();
-  if (entry) {
-    rootInput.value = entry.name;
-    $('root-chip').textContent = 'tu navegador solo da el nombre — completa la ruta';
-    $('root-chip').className = 'chip bad';
-    rootInput.focus();
-  }
+    const item = dt.items && dt.items[0];
+    const entry = item && item.webkitGetAsEntry && item.webkitGetAsEntry();
+    if (entry && onNameOnly) onNameOnly(entry.name);
+  });
+}
+
+wireDrop($('root-input'), setRoot, (name) => {
+  $('root-input').value = name;
+  $('root-chip').textContent = 'tu navegador solo da el nombre — completa la ruta';
+  $('root-chip').className = 'chip bad';
+  $('root-input').focus();
 });
 
 // ---------------------------------------------------------------- episodios
@@ -479,11 +592,40 @@ function paintRunnerBadges() {
   $('runner-badges').innerHTML = b.join('');
 }
 
+// El hash sirve para dos cosas: "#/separar" elige vista, y cualquier otra
+// cosa es un codigo de episodio. Se conserva la segunda forma para que los
+// enlaces "#s03e01" que ya existan sigan abriendo lo suyo.
+function showView(name) {
+  const sep = name === 'separar';
+  $('view-episodes').style.display = sep ? 'none' : '';
+  $('view-separar').style.display = sep ? '' : 'none';
+  $('rootbox').style.display = sep ? 'none' : '';
+  document.querySelectorAll('.tab').forEach(tab => {
+    if (tab.dataset.view === (sep ? 'separar' : 'episodes')) tab.setAttribute('aria-current', 'page');
+    else tab.removeAttribute('aria-current');
+  });
+  if (sep && !msstModels.length) loadMsst();
+}
+
+// Se cambia de vista a mano y luego se ajusta el hash, no al reves: el
+// evento `hashchange` llega tarde, y si el hash ya coincidia no llegaria
+// nunca, dejando el nav marcando una vista que no es la que se ve.
+document.querySelectorAll('.tab').forEach(tab => tab.addEventListener('click', () => {
+  const view = tab.dataset.view;
+  showView(view);
+  const hash = view === 'separar' ? '#/separar' : '';
+  if (location.hash !== hash) {
+    history.replaceState(null, '', hash || location.pathname + location.search);
+  }
+}));
+
 function openFromHash() {
-  const code = decodeURIComponent(location.hash.slice(1));
-  if (!code) return;
-  const ep = episodes.find(e => e.code === code);
-  if (ep && (!current || current.code !== code)) openEpisode(ep.path);
+  const raw = decodeURIComponent(location.hash.slice(1));
+  if (raw.startsWith('/')) { showView(raw.slice(1) || 'episodes'); return; }
+  showView('episodes');
+  if (!raw) return;
+  const ep = episodes.find(e => e.code === raw);
+  if (ep && (!current || current.code !== raw)) openEpisode(ep.path);
 }
 window.addEventListener('hashchange', openFromHash);
 
@@ -798,7 +940,216 @@ function wireName(root) {
   });
 }
 
+// ---------------------------------------------------------------- separar
+async function loadMsst() {
+  try {
+    msstInfo = await api('/api/msst');
+  } catch (e) { toast(e.message, 'bad'); return; }
+
+  if (!$('sep-out').value) $('sep-out').value = msstInfo.output_dir || '';
+  try {
+    msstModels = await api('/api/msst/models');
+  } catch (e) { msstModels = []; }
+
+  if (!sepModel) {
+    const ready = msstModels.find(m => m.ready) || msstModels[0];
+    if (ready) selectModel(ready.id);
+  }
+  renderModels();
+}
+
+function selectModel(id) {
+  sepModel = id;
+  const model = msstModels.find(m => m.id === id);
+  // Al cambiar de modelo, el idioma anterior no tiene por que existir aqui.
+  const langs = (model && model.variants) || [];
+  const usable = langs.filter(v => v.checkpoint_ok);
+  sepLang = usable.length ? (usable.find(v => v.id === sepLang) || usable[0]).id : null;
+}
+
+function renderModels() {
+  const box = $('sep-models');
+  box.innerHTML = '';
+  if (!msstModels.length) {
+    box.innerHTML = '<div class="empty">No hay catalogo. Revisa la ruta del repo de MSST.</div>';
+    return;
+  }
+
+  for (const model of msstModels) {
+    const el = document.createElement('div');
+    el.className = 'model' + (model.ready ? '' : ' off');
+    el.setAttribute('role', 'radio');
+    el.setAttribute('aria-checked', String(model.id === sepModel));
+
+    const side = model.ready
+      ? (model.cpu_only ? '<span class="chip">CPU</span>' : '<span class="chip ok">listo</span>')
+      : (model.downloadable
+          ? `<button class="ghost" data-get="${model.id}">bajar ${model.size_mb} MB</button>`
+          : '<span class="chip bad">sin pesos</span>');
+
+    let langs = '';
+    if (model.variants.length) {
+      langs = '<div class="langs">' + model.variants.map(v => {
+        if (!v.checkpoint_ok) {
+          return `<button class="lang off" data-get="${model.id}" data-lang="${v.id}"
+                   title="descargar ${v.size_mb} MB">${escapeHtml(v.label)} ↓</button>`;
+        }
+        const on = model.id === sepModel && v.id === sepLang;
+        return `<button class="lang" data-lang="${v.id}" aria-checked="${on}">${escapeHtml(v.label)}</button>`;
+      }).join('') + '</div>';
+    }
+
+    el.innerHTML = `
+      <span class="model-mark">${model.id === sepModel ? '◉' : '○'}</span>
+      <div>
+        <div class="model-name">${escapeHtml(model.name)}</div>
+        <div class="model-stems">${model.stems.join(' · ') || 'segun el config'}</div>
+        ${model.note ? `<div class="model-note">${escapeHtml(model.note)}</div>` : ''}
+        ${langs}
+      </div>
+      <div class="model-side">${side}</div>`;
+
+    el.addEventListener('click', (e) => {
+      const get = e.target.closest('[data-get]');
+      if (get) {
+        e.stopPropagation();
+        downloadModel(get.dataset.get, get.dataset.lang || null);
+        return;
+      }
+      const lang = e.target.closest('.lang[data-lang]');
+      if (lang && !lang.classList.contains('off')) {
+        e.stopPropagation();
+        sepModel = model.id;
+        sepLang = lang.dataset.lang;
+      } else {
+        selectModel(model.id);
+      }
+      renderModels();
+      paintPreview();
+    });
+    box.appendChild(el);
+  }
+  paintPreview();
+}
+
+function paintPreview() {
+  const audio = ($('sep-input').value || '').trim();
+  const model = msstModels.find(m => m.id === sepModel);
+  if (!audio || !model) {
+    $('sep-preview').textContent = 'elige un archivo y un modelo';
+    return;
+  }
+  const stem = audio.split('/').pop().replace(/\.[^.]+$/, '');
+  const slug = sepLang ? `${model.id}_${sepLang}` : model.id;
+  const ext = $('sep-format').value === 'flac24' ? 'flac' : 'wav';
+  const stems = model.stems.length ? model.stems.join(',') : 'pistas';
+  const out = ($('sep-out').value || '').replace(/\/$/, '');
+  $('sep-preview').textContent = `${out}/${stem}_${slug}_{${stems}}.${ext}`;
+}
+
+['sep-input', 'sep-out', 'sep-format'].forEach(id =>
+  $(id).addEventListener('input', paintPreview));
+$('sep-format').addEventListener('change', paintPreview);
+
+wireDrop($('sep-input'), (path) => {
+  $('sep-input').value = path;
+  paintPreview();
+}, (name) => {
+  $('sep-input').value = name;
+  toast('Tu navegador solo da el nombre — completa la ruta.', 'bad');
+  $('sep-input').focus();
+});
+
+// La carpeta de salida se guarda en el .env, para que la proxima vez ya este.
+$('sep-out').addEventListener('change', async () => {
+  try { await post('/api/msst', { output_dir: $('sep-out').value }); }
+  catch (e) { toast(e.message, 'bad'); }
+});
+
+async function downloadModel(id, lang) {
+  try {
+    const { job_id } = await post(`/api/msst/models/${id}/download`, { lang });
+    sepStatus('descargando…', '');
+    watchSepJob(job_id, async () => {
+      msstModels = await api('/api/msst/models');
+      renderModels();
+    });
+  } catch (e) { toast(e.message, 'bad'); }
+}
+
+$('sep-btn').addEventListener('click', async () => {
+  const audio = ($('sep-input').value || '').trim();
+  if (!audio) { toast('Falta el archivo de audio.', 'bad'); return; }
+  if (!sepModel) { toast('Elige un modelo.', 'bad'); return; }
+  try {
+    const { job_id } = await post('/api/msst/run', {
+      input: audio,
+      model: sepModel,
+      lang: sepLang,
+      output_dir: $('sep-out').value,
+      format: $('sep-format').value,
+      extract_instrumental: $('sep-inst').checked,
+      tta: $('sep-tta').checked,
+      cpu: $('sep-cpu').checked,
+    });
+    $('sep-log').textContent = '';
+    sepStatus('separando…', '');
+    watchSepJob(job_id);
+  } catch (e) { toast(e.message, 'bad'); }
+});
+
+$('sep-cancel').addEventListener('click', () => cancelJob(sepJob));
+
+async function cancelJob(jobId) {
+  if (!jobId) return;
+  try { await post(`/api/jobs/${jobId}/cancel`, {}); }
+  catch (e) { toast(e.message, 'bad'); }
+}
+
+function sepStatus(text, kind) {
+  const el = $('sep-status');
+  el.style.display = '';
+  el.textContent = text;
+  el.className = 'chip ' + (kind || '');
+}
+
+function watchSepJob(jobId, onDone) {
+  sepJob = jobId;
+  $('sep-btn').disabled = true;
+  $('sep-cancel').style.display = '';
+  if (sepTimer) clearInterval(sepTimer);
+  sepTimer = setInterval(async () => {
+    let data;
+    try { data = await api(`/api/jobs/${jobId}`); }
+    catch (e) { clearInterval(sepTimer); sepTimer = null; return; }
+
+    $('sep-log').textContent = data.log;
+    $('sep-log').scrollTop = $('sep-log').scrollHeight;
+    if (data.status === 'running') { sepStatus(`en marcha… ${fmtSeconds(data.seconds)}`, ''); return; }
+
+    clearInterval(sepTimer);
+    sepTimer = null;
+    sepJob = null;
+    $('sep-btn').disabled = false;
+    $('sep-cancel').style.display = 'none';
+    if (data.status === 'done') {
+      sepStatus(`listo en ${fmtSeconds(data.seconds)}`, 'ok');
+      toast(`Listo en ${fmtSeconds(data.seconds)}.`, 'ok');
+    } else if (data.status === 'cancelled') {
+      sepStatus('cancelado', '');
+      toast('Cancelado.', 'ok');
+    } else {
+      sepStatus('error', 'bad');
+      toast('Ha fallado. Mira la salida.', 'bad');
+      $('sep-log-wrap').open = true;
+    }
+    if (onDone) onDone();
+  }, 1000);
+}
+
 // ---------------------------------------------------------------- ejecucion
+$('run-cancel').addEventListener('click', () => cancelJob(runJob));
+
 $('run-btn').addEventListener('click', async () => {
   if (!current) return;
   try {
@@ -812,6 +1163,8 @@ $('run-btn').addEventListener('click', async () => {
     });
     liveStates = {};
     jobRunning = true;
+    runJob = job_id;
+    $('run-cancel').style.display = '';
     $('log').textContent = '';
     $('log-wrap').open = false;
     setStatus('ejecutando…', '');
@@ -852,7 +1205,12 @@ async function pollJob(jobId) {
   clearInterval(pollTimer);
   pollTimer = null;
   jobRunning = false;
-  if (data.status === 'done') {
+  runJob = null;
+  $('run-cancel').style.display = 'none';
+  if (data.status === 'cancelled') {
+    setStatus('cancelado', '');
+    toast('Cancelado.', 'ok');
+  } else if (data.status === 'done') {
     setStatus(`terminado en ${fmtSeconds(data.seconds)}`, 'ok');
     toast(`Listo en ${fmtSeconds(data.seconds)}.`, 'ok');
   } else {
@@ -868,9 +1226,14 @@ async function pollJob(jobId) {
 
 // ---------------------------------------------------------------- atajos
 document.addEventListener('keydown', (e) => {
+  const separar = $('view-separar').style.display !== 'none';
+  if (e.key === 'Escape') { cancelJob(separar ? sepJob : runJob); return; }
   if (e.target.matches('input, select, textarea')) return;
-  if (e.key === 'Enter' && current && !$('run-btn').disabled) $('run-btn').click();
-  if (e.key === 'r') loadEpisodes();
+  if (e.key === 'Enter') {
+    if (separar) { if (!$('sep-btn').disabled) $('sep-btn').click(); }
+    else if (current && !$('run-btn').disabled) $('run-btn').click();
+  }
+  if (e.key === 'r' && !separar) loadEpisodes();
 });
 
 // ---------------------------------------------------------------- arranque
@@ -880,6 +1243,7 @@ document.addEventListener('keydown', (e) => {
   await loadRoot();
   await loadEpisodes();
   openFromHash();
+  if (location.hash === '#/separar') loadMsst();
   setInterval(() => { if (!pollTimer) loadEpisodes(); }, 15000);
 })();
 </script>

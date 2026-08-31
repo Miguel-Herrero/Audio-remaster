@@ -3,6 +3,73 @@
 Formato basado en [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versionado con [SemVer](https://semver.org/lang/es/).
 
+## [2.3.0] - 2026-08-31
+
+### Added
+- **Pestana «Separar»**: un banco de pruebas para separar un audio suelto con
+  un modelo concreto, sin pasar por el pipeline ni por un episodio. La UI gana
+  un nav de dos vistas y lo que habia hasta ahora pasa a «Episodios».
+  Nace de una necesidad concreta: el paso `separate` siempre usa el modelo
+  fijado en el perfil, asi que no habia forma de escuchar que hace otro.
+- Se apoya en [Music-Source-Separation-Training](https://github.com/ZFTurbo/Music-Source-Separation-Training)
+  (MSST), que da acceso a arquitecturas que `audio-separator` no expone.
+  **El clon de MSST se usa en solo lectura**: se leen sus configs y se ejecuta
+  su `inference.py` con el interprete de su propio `venv`, pero no se escribe
+  nunca dentro de su arbol, para que pueda seguir en `main` y actualizarse con
+  `git pull`. Su ruta se indica con `MSST_REPO_DIR`, en el `.env` o desde la UI.
+- **Bandit**, que en vez de voz/resto separa **dialogo / musica / efectos** —
+  el reparto de una banda sonora, y el motivo principal de todo esto. Estan las
+  dos versiones, con sus diferencias escritas en el catalogo en vez de elegir
+  por ti: v2 trabaja a 48 kHz (los del pipeline, sin remuestreo) y v1 a 44.1 kHz
+  pero con metricas publicadas (DnR 11.50).
+- **Pesos por idioma para Bandit v2**: castellano, ingles y multilingue, ya
+  descargados y convertidos. Salen de [Zenodo 12701995](https://zenodo.org/records/12701995),
+  del paper *Remastering Divide and Remaster* (Netflix + Georgia Tech, 2024).
+  Que el castellano sea uno de los seis idiomas publicados es una casualidad
+  afortunada para este proyecto. Los otros cuatro (frances, aleman, mandarin,
+  feroes) quedan documentados y comentados en el catalogo.
+- `remaster/msst_models.toml`, un catalogo curado de diez modelos con lo que
+  hace falta para invocarlos: `model_type`, config y checkpoint, que en MSST van
+  acoplados. Ademas de Bandit y BS-Roformer, incluye modelos de restauracion
+  utiles para material viejo: **quitar ruido de fondo** (SDR 27.99), **quitar
+  reverberacion** (19.17) y **aislar publico y aplausos**.
+  **Es ampliable sin tocar codigo**: un `msst_models.local.toml` junto al `.env`
+  (o donde apunte `MSST_CATALOG`) se fusiona encima, sobrescribiendo por `id`.
+- Comandos `remaster msst` y `remaster msst-fetch`, que es donde vive toda la
+  logica: la UI solo los lanza, como con el resto del pipeline.
+- **Cancelar un job**, que hasta ahora no se podia: un `run` largo solo se
+  paraba matando el servidor. Vale para las dos vistas.
+- `tests/test_msst.py`, `tests/test_msst_fix.py` y `tests/test_jobs.py`.
+  244 tests en total.
+
+### Fixed
+- **El log de la UI se movia solo al terminar cada fase.** `tqdm` y `ffmpeg`
+  pintan el progreso con `\r` y sin salto de linea, y el lector iteraba por
+  lineas: la barra parecia congelada. Ahora se lee con `read1` y `\r` reescribe
+  la ultima linea, como en un terminal. El pipeline tambien lo nota.
+- **Cancelar mataba al proceso equivocado.** Lo que consume la maquina
+  (`inference.py`, `ffmpeg`, REAPER) es un nieto del proceso que lanza la UI;
+  un terminate al hijo lo habria dejado corriendo. Se lanza con
+  `start_new_session=True` y se mata el grupo entero, escalando a `SIGKILL`.
+- El manejo de rutas `file://` que deja el Finder al arrastrar estaba dentro
+  del endpoint de la carpeta base; ahora es un helper que usan las dos vistas.
+
+### Notes
+- **Bandit no puede usar la GPU de Apple.** La arquitectura registra buffers en
+  `float64` y Metal no soporta doble precision: `model.to("mps")` aborta con
+  «Cannot convert a MPS Tensor to float64». Los dos Bandit van marcados
+  `cpu_only` en el catalogo y se les fuerza CPU sin que haya que descubrirlo
+  fallando. El resto de modelos si usan MPS.
+- Los pesos de Bandit v2 publicados en Zenodo son checkpoints de PyTorch
+  Lightning enteros y **no cargan tal cual en MSST**: el cargador desenvuelve
+  `state_dict` pero deja el prefijo `model.` en las claves, y su
+  `load_state_dict` es estricto. `msst-fetch` aplica la conversion sola
+  ([issue #41](https://github.com/ZFTurbo/Music-Source-Separation-Training/issues/41))
+  y borra el original de 446 MB.
+- El pipeline **no cambia**: para episodios de 50 minutos MVSEP sigue siendo
+  mas rapido y el paso `separate` se queda como estaba. Esta pestana es para
+  pruebas con audio corto.
+
 ## [2.2.0] - 2026-08-31
 
 ### Added

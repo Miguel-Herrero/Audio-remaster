@@ -7,6 +7,12 @@ Un comando, una carpeta de episodio con el layout que ya usas
 from __future__ import annotations
 
 import os
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -35,6 +41,17 @@ from .steps.retime import retime_step
 from .steps.verify import STATUS_DOUBLE_GAIN, VerifyError, build_actions, format_timecode, verify_project, write_report
 from .steps.separate import LocalSeparatorBackend, MvsepSeparatorBackend, SeparatorBackend, separate_all
 from .steps_meta import step_keys
+from .msst import (
+    FORMATS,
+    MsstError,
+    MsstModel,
+    MsstRepo,
+    build_command,
+    find_model,
+    fix_lightning_checkpoint,
+    load_catalog,
+)
+from .web.envfile import read_env
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 console = Console()
@@ -45,6 +62,8 @@ console = Console()
 STEP_ORDER = step_keys()
 
 DEFAULT_MODEL_DIR = Path.home() / ".cache" / "remaster" / "models"
+DEFAULT_MSST_DATA_DIR = Path.home() / ".cache" / "remaster" / "msst"
+ENV_PATH = Path(__file__).resolve().parents[1] / ".env"
 
 
 @app.command()
@@ -807,6 +826,307 @@ def stats_search_dirs(layout: EpisodeLayout) -> list[Path]:
     """
     import tempfile
     return [Path(tempfile.gettempdir()), Path("/tmp"), layout.project_dir, layout.finals]
+
+
+# --------------------------------------------------------------------------
+# Laboratorio de separacion (MSST)
+# --------------------------------------------------------------------------
+# Music-Source-Separation-Training se usa desde fuera: se lee su catalogo de
+# configs y se ejecuta su `inference.py` con el interprete de su propio venv.
+# Nunca se escribe dentro de su arbol, para que pueda seguir en `main` y
+# actualizarse con `git pull`.
+
+
+def msst_setting(name: str, override: Optional[str] = None) -> Optional[str]:
+    """Un ajuste de MSST: primero el flag, luego el entorno, luego el .env.
+
+    El .env se mira aqui y no solo en la UI para que los comandos funcionen
+    igual desde una terminal, sin exportar nada a mano.
+    """
+    if override:
+        return override
+    from_env = os.environ.get(name)
+    if from_env:
+        return from_env
+    return read_env(ENV_PATH).get(name)
+
+
+def build_msst_repo(
+    repo_dir: Optional[str] = None, data_dir: Optional[str] = None
+) -> MsstRepo:
+    root = msst_setting("MSST_REPO_DIR", repo_dir)
+    if not root:
+        console.print(
+            "[red]No se donde esta Music-Source-Separation-Training.[/red]\n"
+            "Pasa --repo, exporta MSST_REPO_DIR o ponlo en el .env:\n"
+            "  MSST_REPO_DIR=/ruta/a/Music-Source-Separation-Training"
+        )
+        raise typer.Exit(1)
+    data = msst_setting("MSST_DATA_DIR", data_dir) or str(DEFAULT_MSST_DATA_DIR)
+    return MsstRepo(
+        root=Path(root).expanduser().resolve(),
+        data_dir=Path(data).expanduser().resolve(),
+    )
+
+
+def msst_catalog() -> list[MsstModel]:
+    """Catalogo base mas el fichero local del usuario, si lo hay."""
+    extra = msst_setting("MSST_CATALOG")
+    extra_path = Path(extra).expanduser() if extra else ENV_PATH.parent / "msst_models.local.toml"
+    return load_catalog(extra=extra_path)
+
+
+def _require_ready(repo: MsstRepo, model: MsstModel, variant) -> None:
+    problems = repo.problems()
+    if problems:
+        console.print("[red]No puedo usar MSST:[/red]")
+        for problem in problems:
+            console.print(f"  · {problem}")
+        raise typer.Exit(1)
+
+    status = repo.status(model, variant)
+    if not status["config_ok"]:
+        console.print(f"[red]Falta el config:[/red] {status['config_path']}")
+        raise typer.Exit(1)
+    if not status["checkpoint_ok"]:
+        lang = f" --lang {variant.id}" if variant else ""
+        console.print(
+            f"[red]Faltan los pesos:[/red] {status['checkpoint_path']}\n"
+            f"Descargalos con: remaster msst-fetch {model.id}{lang}"
+        )
+        raise typer.Exit(1)
+
+
+class _Cancelled(Exception):
+    """Han pedido parar desde fuera (la UI, o un kill a mano)."""
+
+
+def _raise_on_sigterm(signum, frame) -> None:
+    raise _Cancelled()
+
+
+def _human_size(path: Path) -> str:
+    """Un fragmento de tres segundos no puede salir como "0 MB"."""
+    size = path.stat().st_size
+    if size < 1024 * 1024:
+        return f"{size / 1024:.0f} KB"
+    return f"{size / (1024 * 1024):.1f} MB"
+
+
+def _stream(argv: list[str], cwd: Optional[Path] = None) -> int:
+    """Ejecuta y reenvia la salida segun llega.
+
+    `inference.py` informa con tqdm, que pinta con "\r" y sin salto de linea:
+    hay que reenviar los trozos tal cual en vez de iterar por lineas, o la
+    barra no se ve avanzar hasta que termina la fase.
+    """
+    proc = subprocess.Popen(
+        argv, cwd=str(cwd) if cwd else None,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+    )
+    assert proc.stdout is not None
+    while True:
+        chunk = proc.stdout.read1(4096)
+        if not chunk:
+            break
+        sys.stdout.write(chunk.decode("utf-8", errors="replace"))
+        sys.stdout.flush()
+    return proc.wait()
+
+
+@app.command("msst")
+def msst_cmd(
+    audio: Path = typer.Argument(..., help="Fichero de audio a separar"),
+    model_id: str = typer.Option(..., "--model", "-m", help="Id del modelo del catalogo"),
+    lang: Optional[str] = typer.Option(None, "--lang", help="Variante por idioma, si el modelo tiene"),
+    out: Optional[Path] = typer.Option(None, "--out", help="Carpeta de salida"),
+    fmt: str = typer.Option("flac24", "--format", help="flac24 o wav32"),
+    extract_instrumental: bool = typer.Option(False, "--extract-instrumental", help="Invertir para sacar el complementario"),
+    tta: bool = typer.Option(False, "--tta", help="Test time augmentation: triplica el tiempo, limpia un poco"),
+    cpu: bool = typer.Option(False, "--cpu", help="Forzar CPU en vez de la GPU/MPS"),
+    repo_dir: Optional[str] = typer.Option(None, "--repo", help="Carpeta del clon de MSST"),
+    events: Optional[Path] = typer.Option(None, "--events", help="Traza NDJSON para la UI"),
+) -> None:
+    """Separa un audio suelto con un modelo del catalogo de MSST."""
+    log = EventLog(events)
+    audio = audio.expanduser().resolve()
+    if not audio.is_file():
+        console.print(f"[red]No existe el fichero:[/red] {audio}")
+        raise typer.Exit(1)
+
+    repo = build_msst_repo(repo_dir)
+    try:
+        model = find_model(msst_catalog(), model_id)
+        variant = model.variant(lang)
+    except MsstError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+    if fmt not in FORMATS:
+        console.print(f"[red]Formato desconocido:[/red] {fmt}. Usa: {', '.join(FORMATS)}")
+        raise typer.Exit(1)
+    _require_ready(repo, model, variant)
+
+    out_dir = Path(msst_setting("MSST_OUTPUT_DIR", str(out) if out else None)
+                   or audio.parent / "separaciones").expanduser().resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    slug = model.slug(variant)
+    ext = "flac" if fmt == "flac24" else "wav"
+
+    console.print(f"\n[bold]{model.name}[/bold]")
+    console.print(f"  entrada  {audio.name}")
+    console.print(f"  salida   {out_dir}")
+    console.print(f"  pistas   {', '.join(model.stems) or 'las del config'}")
+    if model.cpu_only and not cpu:
+        console.print(
+            "  [yellow]en CPU: este modelo no puede usar la GPU de Apple[/yellow]"
+        )
+
+    # `inference.py` solo mira dentro de una carpeta (glob recursivo), asi que
+    # no acepta un fichero suelto. Se le da un directorio temporal con un
+    # enlace al audio: sin copiar gigas y sin que se cuele ningun .DS_Store.
+    work = Path(tempfile.mkdtemp(prefix="remaster-msst-"))
+    # Cancelar desde la UI manda un SIGTERM, que por defecto mata el proceso
+    # sin pasar por el `finally`: el temporal se quedaria ahi para siempre.
+    # Convertido en excepcion, la limpieza corre igual que en una salida normal.
+    previous = signal.signal(signal.SIGTERM, _raise_on_sigterm)
+    try:
+        log.start("preparar")
+        link = work / "in" / audio.name
+        link.parent.mkdir(parents=True)
+        link.symlink_to(audio)
+        raw_out = work / "out"
+        raw_out.mkdir()
+        log.close()
+
+        log.start("separar")
+        argv = build_command(
+            repo, model, link.parent, raw_out,
+            variant=variant, fmt=fmt,
+            extract_instrumental=extract_instrumental,
+            use_tta=tta, force_cpu=cpu,
+        )
+        code = _stream(argv, cwd=repo.root)
+        if code != 0:
+            log.fail(f"inference.py ha salido con codigo {code}")
+            console.print(f"\n[red]La separacion ha fallado (codigo {code}).[/red]")
+            raise typer.Exit(code)
+        log.close()
+
+        # Los nombres quedan planos y con el modelo dentro, para poder probar
+        # dos modelos sobre el mismo audio sin que uno pise al otro.
+        log.start("recoger")
+        produced = sorted(p for p in raw_out.rglob("*") if p.is_file())
+        if not produced:
+            log.fail("inference.py no ha escrito ninguna pista")
+            console.print("\n[red]No ha salido ninguna pista.[/red]")
+            raise typer.Exit(1)
+
+        console.print("")
+        for path in produced:
+            instr = path.stem.split("__")[-1]
+            final = out_dir / f"{audio.stem}_{slug}_{instr}{path.suffix or '.' + ext}"
+            shutil.move(str(path), final)
+            console.print(f"  [green]{final.name}[/green]  {_human_size(final)}")
+        log.close()
+    except _Cancelled:
+        console.print("\n[yellow]Cancelado.[/yellow]")
+        raise typer.Exit(130)
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+        shutil.rmtree(work, ignore_errors=True)
+
+    console.print("\n[green]Listo.[/green]")
+
+
+def _download(url: str, dest: Path, label: str) -> None:
+    """Descarga con reintentos. Zenodo devuelve 504 a ratos."""
+    import requests
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    last: Optional[Exception] = None
+    for attempt in range(4):
+        try:
+            with requests.get(url, stream=True, timeout=60) as resp:
+                resp.raise_for_status()
+                total = int(resp.headers.get("content-length", 0))
+                done = 0
+                shown = -1
+                with dest.open("wb") as handle:
+                    for chunk in resp.iter_content(chunk_size=1 << 20):
+                        handle.write(chunk)
+                        done += len(chunk)
+                        if total:
+                            pct = done * 100 // total
+                            if pct != shown:
+                                shown = pct
+                                print(f"\r{label}: {pct}% de {total / 1048576:.0f} MB",
+                                      end="", flush=True)
+                print("")
+            return
+        except Exception as exc:  # red, 504, corte a media descarga
+            last = exc
+            dest.unlink(missing_ok=True)
+            wait = 5 * (attempt + 1)
+            console.print(f"[yellow]{label}: fallo ({exc}). Reintento en {wait}s.[/yellow]")
+            time.sleep(wait)
+    raise MsstError(f"no he podido descargar {url}: {last}")
+
+
+@app.command("msst-fetch")
+def msst_fetch_cmd(
+    model_id: str = typer.Argument(..., help="Id del modelo del catalogo"),
+    lang: Optional[str] = typer.Option(None, "--lang", help="Variante por idioma"),
+    repo_dir: Optional[str] = typer.Option(None, "--repo", help="Carpeta del clon de MSST"),
+    force: bool = typer.Option(False, "--force", help="Volver a descargar aunque ya este"),
+) -> None:
+    """Descarga los pesos (y el config) de un modelo del catalogo."""
+    repo = build_msst_repo(repo_dir)
+    try:
+        model = find_model(msst_catalog(), model_id)
+        variant = model.variant(lang)
+    except MsstError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    label = f"{model.id}{'/' + variant.id if variant else ''}"
+    console.print(f"\n[bold]{label}[/bold]  →  {repo.data_dir}")
+
+    config_url = model.config_url
+    config_path = repo.resolve(model.config)
+    if config_url and (force or not config_path.is_file()):
+        _download(config_url, config_path, "config")
+
+    ckpt_url = variant.checkpoint_url if variant else model.checkpoint_url
+    needs_fix = variant.needs_fix if variant else model.needs_fix
+    ckpt_path = repo.resolve(model.checkpoint_ref(variant))
+
+    if not ckpt_url:
+        console.print("[yellow]Este modelo no trae URL: los pesos vienen con el repo.[/yellow]")
+        raise typer.Exit(0 if ckpt_path.is_file() else 1)
+    if ckpt_path.is_file() and not force:
+        console.print(f"[green]Ya estaba:[/green] {ckpt_path}")
+        raise typer.Exit(0)
+
+    try:
+        if needs_fix:
+            # Los pesos publicados de Bandit v2 son checkpoints de Lightning
+            # enteros; MSST necesita el state dict pelado. Se baja a un fichero
+            # aparte, se convierte y se borra el original de 425 MB.
+            raw = ckpt_path.with_name(ckpt_path.name.replace("_fixed", ""))
+            _download(ckpt_url, raw, "pesos")
+            console.print("Convirtiendo el checkpoint de Lightning…")
+            keys = fix_lightning_checkpoint(raw, ckpt_path)
+            raw.unlink(missing_ok=True)
+            console.print(f"  {keys} claves")
+        else:
+            _download(ckpt_url, ckpt_path, "pesos")
+    except MsstError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    size = ckpt_path.stat().st_size / (1024 * 1024)
+    console.print(f"\n[green]Listo:[/green] {ckpt_path}  ({size:.0f} MB)")
 
 
 if __name__ == "__main__":

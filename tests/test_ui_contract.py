@@ -66,3 +66,46 @@ def test_the_ui_does_not_hardcode_the_step_list():
         if key in with_ui:
             continue
         assert f"'{key}'" not in html, f"«{key}» esta escrito a mano en el HTML"
+
+
+# --------------------------------------------------------------- las dos vistas
+
+def test_every_tab_has_a_view():
+    """Cada boton del nav apunta a un contenedor que existe."""
+    html = _INDEX.read_text(encoding="utf-8")
+    views = set(re.findall(r'class="tab" data-view="(\w+)"', html))
+    assert views == {"episodes", "separar"}
+    for view in views:
+        assert f'id="view-{view}"' in html, view
+
+
+def test_the_separate_view_has_its_own_log_and_buttons():
+    """La vista Separar no puede reutilizar los ids de la de Episodios: si
+    lo hiciera, un job de cada tipo se pisaria el log y el estado.
+    """
+    html = _INDEX.read_text(encoding="utf-8")
+    for element in ("sep-input", "sep-out", "sep-models", "sep-btn",
+                    "sep-cancel", "sep-log", "sep-status", "sep-preview"):
+        assert f'id="{element}"' in html, element
+
+
+def test_both_views_can_cancel():
+    """Cancelar es requisito: una separacion en CPU puede durar mucho."""
+    html = _INDEX.read_text(encoding="utf-8")
+    assert 'id="run-cancel"' in html
+    assert 'id="sep-cancel"' in html
+    assert "/cancel" in html
+
+
+def test_the_old_episode_hashes_still_work():
+    """Los enlaces "#s03e01" son anteriores al nav y deben seguir abriendo
+    su episodio: solo los que empiezan por "/" eligen vista.
+    """
+    html = _INDEX.read_text(encoding="utf-8")
+    assert "raw.startsWith('/')" in html
+
+
+def test_the_cancelled_state_is_handled():
+    """`cancelled` no es `error`: lo pediste tu, no ha fallado nada."""
+    html = _INDEX.read_text(encoding="utf-8")
+    assert html.count("'cancelled'") >= 2
