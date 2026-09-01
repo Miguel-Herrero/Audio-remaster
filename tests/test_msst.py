@@ -268,3 +268,46 @@ def test_catalog_with_status_is_serializable(repo):
 
 def test_the_catalog_file_ships_with_the_package():
     assert DEFAULT_CATALOG.is_file()
+
+
+# --------------------------------------------------------------------------
+# El sample rate declarado tiene que ser el de verdad
+# --------------------------------------------------------------------------
+
+def test_every_model_declares_a_sample_rate():
+    """Se enseña en la interfaz para decidir: no puede faltar en ninguno."""
+    for model in load_catalog():
+        assert model.sample_rate > 0, model.id
+
+
+def test_the_declared_sample_rate_matches_the_config():
+    """El catalogo repite un dato que vive en el YAML de MSST, asi que puede
+    quedarse viejo cuando el repo se actualiza. Esto lo detecta.
+
+    Se salta si no hay un clon del repo a mano (en CI, por ejemplo).
+    """
+    import os
+    import re
+
+    root = os.environ.get("MSST_REPO_DIR")
+    if not root:
+        pytest.skip("sin MSST_REPO_DIR, no hay configs contra los que comparar")
+    repo = MsstRepo(root=Path(root).expanduser(), data_dir=Path("/dev/null"))
+
+    comprobados = 0
+    for model in load_catalog():
+        if not model.config.startswith("repo:"):
+            continue  # el config se descarga; no esta en disco todavia
+        config = repo.resolve(model.config)
+        if not config.is_file():
+            continue
+        match = re.search(r"^\s*sample_rate:\s*(\d+)", config.read_text(), re.M)
+        if not match:
+            continue
+        real = int(match.group(1))
+        assert model.sample_rate == real, (
+            f"{model.id}: el catalogo dice {model.sample_rate} Hz "
+            f"y {config.name} dice {real} Hz"
+        )
+        comprobados += 1
+    assert comprobados, "no he podido comprobar ningun config"

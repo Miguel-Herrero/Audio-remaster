@@ -116,6 +116,12 @@ maquina, porque cada ejecucion se apunta en
 `~/.config/remaster/msst_timings.json` y la recta se recalcula con tus medidas.
 El historial va por modelo, idioma y dispositivo.
 
+Cada modelo indica **a que frecuencia trabaja**. Casi todos se entrenaron a
+44,1 kHz y devuelven los stems a esa frecuencia, remuestreando lo que les des
+(MVSEP hace lo mismo). Con material de cine y TV no hay nada audible en juego:
+por encima de 20 kHz una fuente de DVD ya no tiene senal. Bandit v2 es el unico
+del catalogo que trabaja nativamente a 48 kHz.
+
 **Bandit corre en CPU a la fuerza**: la arquitectura usa `float64` y Metal no
 lo soporta, asi que con audio largo tarda. Para eso esta el boton de cancelar,
 que ademas mata el arbol de procesos entero y no solo el hijo directo.

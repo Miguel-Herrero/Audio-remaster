@@ -68,6 +68,11 @@ class MsstModel:
     # `model.to("mps")` revienta con "Cannot convert a MPS Tensor to float64".
     # Se marcan aqui para forzarles CPU sin que haya que descubrirlo fallando.
     cpu_only: bool = False
+    # A que frecuencia trabaja el modelo. Casi todos se entrenaron a 44100, asi
+    # que remuestrean la entrada y devuelven los stems a esa frecuencia: no es
+    # cosa de MSST ni de MVSEP, es la arquitectura. Conviene verlo antes de
+    # elegir, sobre todo si tu material va a 48000.
+    sample_rate: int = 0
     # Cuanto cuesta el modelo, por dispositivo: (device, carga_s, ritmo).
     # Es el punto de partida hasta que haya medidas de tu propia maquina.
     speed: tuple[tuple[str, float, float], ...] = ()
@@ -120,6 +125,7 @@ def _model_from(raw: dict) -> MsstModel:
         needs_fix=bool(raw.get("needs_fix", False)),
         size_mb=int(raw.get("size_mb", 0)),
         cpu_only=bool(raw.get("cpu_only", False)),
+        sample_rate=int(raw.get("sample_rate", 0)),
         speed=tuple(
             (device, float(v.get("load", 0.0)), float(v.get("rate", 0.0)))
             for device, v in (raw.get("speed") or {}).items()
@@ -307,6 +313,7 @@ def catalog_with_status(
             "note": model.note,
             "size_mb": model.size_mb,
             "cpu_only": model.cpu_only,
+            "sample_rate": model.sample_rate,
             "downloadable": bool(model.checkpoint_url),
             **repo.status(model),
             "variants": [],

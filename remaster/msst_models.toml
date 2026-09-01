@@ -14,6 +14,13 @@
 # crea `msst_models.local.toml` junto al .env (o apunta MSST_CATALOG a el) y
 # sus entradas se fusionan encima de estas, sobrescribiendo por `id`.
 #
+# `sample_rate` es la frecuencia a la que trabaja el modelo. Casi todos se
+# entrenaron a 44100: remuestrean lo que les des y devuelven los stems a esa
+# frecuencia. Con material de 48000 eso supone un viaje 48 -> 44.1 -> 48, que
+# en audio de cine y TV no quita nada audible (por encima de 20 kHz no suele
+# haber senal), pero conviene saberlo antes de elegir. Bandit v2 es el unico
+# del catalogo que trabaja nativamente a 48000.
+#
 # SDR = Signal-to-Distortion Ratio; mas alto es mejor. Las cifras salen de
 # docs/pretrained_models.md del repo de MSST y no son comparables entre
 # tareas distintas (separar voz no se mide igual que quitar ruido).
@@ -30,6 +37,7 @@ config = "repo:configs/config_dnr_bandit_v2_mus64.yaml"
 checkpoint = "data:bandit_v2/checkpoint-multi_fixed.ckpt"
 stems = ["speech", "music", "sfx"]
 size_mb = 142
+sample_rate = 48000
 speed = { cpu = { load = 7.0, rate = 7.1 } }
 cpu_only = true
 note = """Trabaja a 48 kHz, como el pipeline, asi que no hay remuestreo. \
@@ -83,6 +91,7 @@ checkpoint = "repo:pretrained/bandit_plus/model_bandit_plus_dnr_sdr_11.47.chpt"
 checkpoint_url = "https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/download/v.1.0.3/model_bandit_plus_dnr_sdr_11.47.chpt"
 stems = ["speech", "music", "effects"]
 size_mb = 142
+sample_rate = 44100
 cpu_only = true
 note = """Con metricas publicadas: DnR 11.50 de media — voz 15.64, \
 musica 9.18, efectos 9.69. Trabaja a 44.1 kHz, asi que hay remuestreo \
@@ -102,6 +111,7 @@ checkpoint = "repo:pretrained/bs_roformer/model_bs_roformer_ep_317_sdr_12.9755.c
 checkpoint_url = "https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models/model_bs_roformer_ep_317_sdr_12.9755.ckpt"
 stems = ["vocals", "other"]
 size_mb = 610
+sample_rate = 44100
 speed = { mps = { load = 4.4, rate = 4.44 } }
 note = """El mismo modelo que usa el pipeline con `--separator local`. \
 SDR vocals 10.87. Util como referencia: lo que salga aqui es lo que \
@@ -116,6 +126,7 @@ checkpoint = "data:mel_band_roformer_kj/MelBandRoformer.ckpt"
 checkpoint_url = "https://huggingface.co/KimberleyJSN/melbandroformer/resolve/main/MelBandRoformer.ckpt"
 stems = ["vocals", "other"]
 size_mb = 871
+sample_rate = 44100
 note = "El mejor de voz del catalogo por SDR (10.98), y el mas pesado de bajar."
 
 [[model]]
@@ -127,6 +138,7 @@ checkpoint = "data:mel_band_roformer_viperx/model_mel_band_roformer_ep_3005_sdr_
 checkpoint_url = "https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models/model_mel_band_roformer_ep_3005_sdr_11.4360.ckpt"
 stems = ["vocals", "other"]
 size_mb = 961
+sample_rate = 44100
 note = "SDR vocals 9.67. Otra arquitectura con que contrastar el resultado."
 
 [[model]]
@@ -139,6 +151,7 @@ checkpoint = "data:mdx23c_vocals/model_vocals_mdx23c_sdr_10.17.ckpt"
 checkpoint_url = "https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/download/v1.0.0/model_vocals_mdx23c_sdr_10.17.ckpt"
 stems = ["vocals", "other"]
 size_mb = 427
+sample_rate = 44100
 note = "SDR vocals 10.17. Arquitectura convolucional, distinta a los roformer."
 
 # --------------------------------------------------------------------------
@@ -155,6 +168,7 @@ checkpoint = "data:denoise_mel_band_roformer/denoise_mel_band_roformer_aufr33_sd
 checkpoint_url = "https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/download/v.1.0.7/denoise_mel_band_roformer_aufr33_sdr_27.9959.ckpt"
 stems = ["dry", "other"]
 size_mb = 871
+sample_rate = 44100
 note = """Separa la senal limpia del ruido (siseo, zumbido). \
 Pensado justo para material viejo. SDR 27.99, que no es comparable con \
 los de separacion de voz: mide otra cosa."""
@@ -169,6 +183,7 @@ checkpoint = "data:dereverb_mel_band_roformer/dereverb_mel_band_roformer_anvuew_
 checkpoint_url = "https://huggingface.co/anvuew/dereverb_mel_band_roformer/resolve/main/dereverb_mel_band_roformer_anvuew_sdr_19.1729.ckpt"
 stems = ["noreverb", "reverb"]
 size_mb = 871
+sample_rate = 44100
 note = "Quita la cola de reverberacion de una voz ya separada. SDR 19.17."
 
 [[model]]
@@ -181,6 +196,7 @@ checkpoint = "data:mel_band_roformer_crowd/mel_band_roformer_crowd_aufr33_viperx
 checkpoint_url = "https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/download/v.1.0.4/mel_band_roformer_crowd_aufr33_viperx_sdr_8.7144.ckpt"
 stems = ["crowd", "other"]
 size_mb = 871
+sample_rate = 44100
 note = "Aisla risas enlatadas, aplausos y murmullo de fondo. SDR 8.71."
 
 # --------------------------------------------------------------------------
@@ -196,5 +212,6 @@ checkpoint = "data:htdemucs_6stems/5c90dfd2-34c22ccb.th"
 checkpoint_url = "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/5c90dfd2-34c22ccb.th"
 stems = ["bass", "drums", "vocals", "other", "piano", "guitar"]
 size_mb = 52
+sample_rate = 44100
 note = """Seis pistas de un golpe y solo 52 MB. Util para desmenuzar la \
 musica de fondo una vez separada del dialogo."""

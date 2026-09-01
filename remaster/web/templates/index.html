@@ -125,6 +125,7 @@ label { font-size: .9rem; }
 .model[aria-checked="true"] .model-mark { color: var(--accent); }
 .model-name { font-weight: 550; }
 .model-stems { font-family: var(--mono); font-size: .76rem; color: var(--fg-dim); margin-top: .1rem; }
+.model-sr { color: var(--fg-faint); }
 .model-note { font-size: .8rem; color: var(--fg-faint); margin-top: .25rem; line-height: 1.45; }
 .model-side { display: flex; flex-direction: column; align-items: flex-end; gap: .3rem; }
 .langs { display: flex; gap: .3rem; flex-wrap: wrap; margin-top: .45rem; }
@@ -1007,7 +1008,8 @@ function renderModels() {
       <span class="model-mark">${model.id === sepModel ? '◉' : '○'}</span>
       <div>
         <div class="model-name">${escapeHtml(model.name)}</div>
-        <div class="model-stems">${model.stems.join(' · ') || 'segun el config'}</div>
+        <div class="model-stems">${model.stems.join(' · ') || 'segun el config'}${
+          model.sample_rate ? ` <span class="model-sr">· ${model.sample_rate / 1000} kHz</span>` : ''}</div>
         ${model.note ? `<div class="model-note">${escapeHtml(model.note)}</div>` : ''}
         ${langs}
       </div>

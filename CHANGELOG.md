@@ -6,6 +6,13 @@ versionado con [SemVer](https://semver.org/lang/es/).
 ## [2.3.0] - 2026-08-31
 
 ### Added
+- **Cada modelo dice a que frecuencia trabaja**, junto a las pistas que separa.
+  Casi todos se entrenaron a 44,1 kHz: remuestrean lo que les des y devuelven
+  los stems a esa frecuencia. Bandit v2 es el unico del catalogo que trabaja
+  nativamente a 48 kHz, la del pipeline. Un test compara lo que declara el
+  catalogo con el YAML de MSST, para que no se quede viejo al actualizar el repo.
+
+### Added
 - **Estimacion de cuanto va a tardar**, antes de lanzar. Separar un episodio
   entero puede irse a horas y no habia forma de saberlo sin probar. El coste se
   modela como una recta — `tiempo = carga + ritmo * segundos_de_audio` —, porque
@@ -70,6 +77,15 @@ versionado con [SemVer](https://semver.org/lang/es/).
   `start_new_session=True` y se mata el grupo entero, escalando a `SIGKILL`.
 - El manejo de rutas `file://` que deja el Finder al arrastrar estaba dentro
   del endpoint de la carpeta base; ahora es un helper que usan las dos vistas.
+
+### Notes
+- Sobre el remuestreo a 44,1 kHz: **MVSEP hace exactamente lo mismo** — los
+  stems generados con el pipeline hasta ahora tambien estan a 44,1 kHz. No es
+  cosa de un backend ni del otro, es que estos modelos se entrenaron asi.
+  Medido sobre material del proyecto, la banda que se pierde en el viaje
+  48 -> 44,1 -> 48 (22-24 kHz) esta a -115 dBFS: el suelo de ruido digital.
+  Por encima de 20 kHz ya no hay senal en una fuente de DVD de 1984, asi que
+  no hay nada audible en juego.
 
 ### Notes
 - **Bandit no puede usar la GPU de Apple.** La arquitectura registra buffers en
