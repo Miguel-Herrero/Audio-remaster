@@ -3,31 +3,7 @@
 Formato basado en [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versionado con [SemVer](https://semver.org/lang/es/).
 
-## [2.3.0] - 2026-08-31
-
-### Added
-- **Cada modelo dice a que frecuencia trabaja**, junto a las pistas que separa.
-  Casi todos se entrenaron a 44,1 kHz: remuestrean lo que les des y devuelven
-  los stems a esa frecuencia. Bandit v2 es el unico del catalogo que trabaja
-  nativamente a 48 kHz, la del pipeline. Un test compara lo que declara el
-  catalogo con el YAML de MSST, para que no se quede viejo al actualizar el repo.
-
-### Added
-- **Estimacion de cuanto va a tardar**, antes de lanzar. Separar un episodio
-  entero puede irse a horas y no habia forma de saberlo sin probar. El coste se
-  modela como una recta — `tiempo = carga + ritmo * segundos_de_audio` —, porque
-  cargar el modelo cuesta lo mismo con tres segundos que con una hora y solo la
-  segunda parte crece.
-- Los valores de partida estan **medidos**, no supuestos, y viven en el catalogo
-  junto a cada modelo. Pero a partir de la primera ejecucion **manda lo que tarda
-  en tu maquina**: cada separacion se apunta en
-  `~/.config/remaster/msst_timings.json` y, en cuanto hay dos duraciones
-  distintas, la recta se reajusta por minimos cuadrados con tus propias medidas.
-  La interfaz dice de donde sale la cifra («estimacion de fabrica» o «N
-  ejecuciones tuyas»), que no es lo mismo.
-- El historial se guarda por modelo, idioma y dispositivo: lo que tarda Bandit en
-  CPU no dice nada de lo que tardara BS-Roformer en la GPU.
-- `remaster msst` tambien la imprime antes de empezar.
+## [2.3.0] - 2026-09-01
 
 ### Added
 - **Pestana «Separar»**: un banco de pruebas para separar un audio suelto con
@@ -59,12 +35,32 @@ versionado con [SemVer](https://semver.org/lang/es/).
   reverberacion** (19.17) y **aislar publico y aplausos**.
   **Es ampliable sin tocar codigo**: un `msst_models.local.toml` junto al `.env`
   (o donde apunte `MSST_CATALOG`) se fusiona encima, sobrescribiendo por `id`.
+- **Cada modelo dice a que frecuencia trabaja**, junto a las pistas que separa.
+  Casi todos se entrenaron a 44,1 kHz: remuestrean lo que les des y devuelven
+  los stems a esa frecuencia. Bandit v2 es el unico del catalogo que trabaja
+  nativamente a 48 kHz, la del pipeline. Un test compara lo que declara el
+  catalogo con el YAML de MSST, para que no se quede viejo al actualizar el repo.
 - Comandos `remaster msst` y `remaster msst-fetch`, que es donde vive toda la
   logica: la UI solo los lanza, como con el resto del pipeline.
+- **Estimacion de cuanto va a tardar**, antes de lanzar. Separar un episodio
+  entero puede irse a horas y no habia forma de saberlo sin probar. El coste se
+  modela como una recta — `tiempo = carga + ritmo * segundos_de_audio` —, porque
+  cargar el modelo cuesta lo mismo con tres segundos que con una hora y solo la
+  segunda parte crece.
+- Los valores de partida de esa estimacion estan **medidos**, no supuestos, y
+  viven en el catalogo junto a cada modelo. Pero a partir de la primera
+  ejecucion **manda lo que tarda en tu maquina**: cada separacion se apunta en
+  `~/.config/remaster/msst_timings.json` y, en cuanto hay dos duraciones
+  distintas, la recta se reajusta por minimos cuadrados con tus propias medidas.
+  La interfaz dice de donde sale la cifra («estimacion de fabrica» o «N
+  ejecuciones tuyas»), que no es lo mismo. El historial se guarda por modelo,
+  idioma y dispositivo: lo que tarda Bandit en CPU no dice nada de lo que
+  tardara BS-Roformer en la GPU.
 - **Cancelar un job**, que hasta ahora no se podia: un `run` largo solo se
   paraba matando el servidor. Vale para las dos vistas.
-- `tests/test_msst.py`, `tests/test_msst_fix.py` y `tests/test_jobs.py`.
-  244 tests en total.
+- `tests/test_msst.py`, `tests/test_msst_cli.py`, `tests/test_msst_fix.py`,
+  `tests/test_msst_timing.py` y `tests/test_jobs.py`. 281 tests en total,
+  frente a los 186 de la version anterior.
 
 ### Fixed
 - **El log de la UI se movia solo al terminar cada fase.** `tqdm` y `ffmpeg`
@@ -75,17 +71,10 @@ versionado con [SemVer](https://semver.org/lang/es/).
   (`inference.py`, `ffmpeg`, REAPER) es un nieto del proceso que lanza la UI;
   un terminate al hijo lo habria dejado corriendo. Se lanza con
   `start_new_session=True` y se mata el grupo entero, escalando a `SIGKILL`.
+  La CLI ademas atiende `SIGTERM`, para que su directorio temporal se limpie
+  igual al cancelar.
 - El manejo de rutas `file://` que deja el Finder al arrastrar estaba dentro
   del endpoint de la carpeta base; ahora es un helper que usan las dos vistas.
-
-### Notes
-- Sobre el remuestreo a 44,1 kHz: **MVSEP hace exactamente lo mismo** — los
-  stems generados con el pipeline hasta ahora tambien estan a 44,1 kHz. No es
-  cosa de un backend ni del otro, es que estos modelos se entrenaron asi.
-  Medido sobre material del proyecto, la banda que se pierde en el viaje
-  48 -> 44,1 -> 48 (22-24 kHz) esta a -115 dBFS: el suelo de ruido digital.
-  Por encima de 20 kHz ya no hay senal en una fuente de DVD de 1984, asi que
-  no hay nada audible en juego.
 
 ### Notes
 - **Bandit no puede usar la GPU de Apple.** La arquitectura registra buffers en
@@ -99,6 +88,17 @@ versionado con [SemVer](https://semver.org/lang/es/).
   `load_state_dict` es estricto. `msst-fetch` aplica la conversion sola
   ([issue #41](https://github.com/ZFTurbo/Music-Source-Separation-Training/issues/41))
   y borra el original de 446 MB.
+- Sobre el remuestreo a 44,1 kHz: **MVSEP hace exactamente lo mismo** — los
+  stems generados con el pipeline hasta ahora tambien estan a 44,1 kHz. No es
+  cosa de un backend ni del otro, es que estos modelos se entrenaron asi.
+  Medido sobre material del proyecto, la banda que se pierde en el viaje
+  48 -> 44,1 -> 48 (22-24 kHz) esta a -115 dBFS: el suelo de ruido digital.
+  Por encima de 20 kHz ya no hay senal en una fuente de DVD de 1984, asi que
+  no hay nada audible en juego.
+- Medido tambien: los tiempos **crecen peor que lineal** con la duracion del
+  audio, asi que la estimacion es un suelo y no una promesa. Se acepta a
+  proposito, porque ajustar la recta con los tamanos que de verdad uses sale
+  mejor que inventar una curva con dos puntos.
 - El pipeline **no cambia**: para episodios de 50 minutos MVSEP sigue siendo
   mas rapido y el paso `separate` se queda como estaba. Esta pestana es para
   pruebas con audio corto.
