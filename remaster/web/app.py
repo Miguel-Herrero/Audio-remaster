@@ -37,11 +37,13 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from ..cli import (
     DEFAULT_MSST_DATA_DIR,
+    MSST_TIMINGS_PATH,
     STEP_ORDER,
     run_calibration,
     stats_search_dirs,
 )
 from ..msst import MsstError, MsstRepo, catalog_with_status, find_model, load_catalog
+from ..msst_timing import device_for, format_eta, speed_for
 from ..events import read_events
 from ..layout import EpisodeLayout
 from ..manifest import Manifest
@@ -644,6 +646,40 @@ def api_msst_download(model_id: str, payload: dict | None = None) -> JSONRespons
     if lang:
         command += ["--lang", lang]
     return _start_job(model_id, command, kind="fetch")
+
+
+@app.get("/api/msst/eta")
+def api_msst_eta(path: str, model: str, lang: str = "", cpu: bool = False) -> JSONResponse:
+    """Cuanto va a tardar, antes de lanzarlo.
+
+    Se calcula aqui y no en el navegador porque hace falta la duracion real
+    del audio (ffprobe) y el historial de esta maquina.
+    """
+    audio = Path(_clean_path(path))
+    if not audio.is_file():
+        raise HTTPException(400, "no existe el fichero")
+    try:
+        found = find_model(_msst_catalog(), model)
+        variant = found.variant(lang or None)
+    except MsstError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    from ..probe import probe_file
+    try:
+        seconds = probe_file(audio).duration
+    except Exception:
+        raise HTTPException(400, "no he podido leer la duracion del audio")
+
+    device = device_for(found, force_cpu=cpu)
+    speed, origin = speed_for(found, variant.id if variant else None, device,
+                              MSST_TIMINGS_PATH)
+    return JSONResponse({
+        "audio_seconds": round(seconds, 1),
+        "eta_seconds": round(speed.estimate(seconds)),
+        "eta": format_eta(speed.estimate(seconds)),
+        "device": device,
+        "source": origin,
+    })
 
 
 @app.post("/api/msst/run")

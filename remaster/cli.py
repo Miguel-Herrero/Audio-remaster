@@ -51,6 +51,7 @@ from .msst import (
     fix_lightning_checkpoint,
     load_catalog,
 )
+from .msst_timing import device_for, format_eta, key_for, record, speed_for
 from .web.envfile import read_env
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
@@ -63,6 +64,8 @@ STEP_ORDER = step_keys()
 
 DEFAULT_MODEL_DIR = Path.home() / ".cache" / "remaster" / "models"
 DEFAULT_MSST_DATA_DIR = Path.home() / ".cache" / "remaster" / "msst"
+# Historial de duraciones, para que la estimacion se ajuste a esta maquina.
+MSST_TIMINGS_PATH = Path.home() / ".config" / "remaster" / "msst_timings.json"
 ENV_PATH = Path(__file__).resolve().parents[1] / ".env"
 
 
@@ -905,6 +908,17 @@ def _raise_on_sigterm(signum, frame) -> None:
     raise _Cancelled()
 
 
+def _audio_seconds(path: Path) -> float:
+    """Duracion del audio, o 0 si ffprobe no sabe decirla.
+
+    Sin duracion no hay estimacion, pero tampoco es motivo para no separar.
+    """
+    try:
+        return probe_file(path).duration
+    except Exception:
+        return 0.0
+
+
 def _human_size(path: Path) -> str:
     """Un fragmento de tres segundos no puede salir como "0 MB"."""
     size = path.stat().st_size
@@ -982,6 +996,17 @@ def msst_cmd(
             "  [yellow]en CPU: este modelo no puede usar la GPU de Apple[/yellow]"
         )
 
+    device = device_for(model, force_cpu=cpu)
+    audio_seconds = _audio_seconds(audio)
+    if audio_seconds:
+        speed, origen = speed_for(model, variant.id if variant else None, device,
+                                  MSST_TIMINGS_PATH)
+        console.print(
+            f"  tardara  {format_eta(speed.estimate(audio_seconds))}"
+            f" [dim]({origen})[/dim]"
+        )
+    started = time.time()
+
     # `inference.py` solo mira dentro de una carpeta (glob recursivo), asi que
     # no acepta un fichero suelto. Se le da un directorio temporal con un
     # enlace al audio: sin copiar gigas y sin que se cuele ningun .DS_Store.
@@ -1029,6 +1054,12 @@ def msst_cmd(
             shutil.move(str(path), final)
             console.print(f"  [green]{final.name}[/green]  {_human_size(final)}")
         log.close()
+
+        # Lo que ha tardado de verdad afina la proxima estimacion.
+        if audio_seconds:
+            record(MSST_TIMINGS_PATH, key_for(model.id, variant.id if variant else None,
+                                              device),
+                   audio_seconds, time.time() - started)
     except _Cancelled:
         console.print("\n[yellow]Cancelado.[/yellow]")
         raise typer.Exit(130)

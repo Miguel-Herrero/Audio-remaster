@@ -6,6 +6,23 @@ versionado con [SemVer](https://semver.org/lang/es/).
 ## [2.3.0] - 2026-08-31
 
 ### Added
+- **Estimacion de cuanto va a tardar**, antes de lanzar. Separar un episodio
+  entero puede irse a horas y no habia forma de saberlo sin probar. El coste se
+  modela como una recta — `tiempo = carga + ritmo * segundos_de_audio` —, porque
+  cargar el modelo cuesta lo mismo con tres segundos que con una hora y solo la
+  segunda parte crece.
+- Los valores de partida estan **medidos**, no supuestos, y viven en el catalogo
+  junto a cada modelo. Pero a partir de la primera ejecucion **manda lo que tarda
+  en tu maquina**: cada separacion se apunta en
+  `~/.config/remaster/msst_timings.json` y, en cuanto hay dos duraciones
+  distintas, la recta se reajusta por minimos cuadrados con tus propias medidas.
+  La interfaz dice de donde sale la cifra («estimacion de fabrica» o «N
+  ejecuciones tuyas»), que no es lo mismo.
+- El historial se guarda por modelo, idioma y dispositivo: lo que tarda Bandit en
+  CPU no dice nada de lo que tardara BS-Roformer en la GPU.
+- `remaster msst` tambien la imprime antes de empezar.
+
+### Added
 - **Pestana «Separar»**: un banco de pruebas para separar un audio suelto con
   un modelo concreto, sin pasar por el pipeline ni por un episodio. La UI gana
   un nav de dos vistas y lo que habia hasta ahora pasa a «Episodios».

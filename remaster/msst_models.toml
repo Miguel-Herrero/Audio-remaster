@@ -30,6 +30,7 @@ config = "repo:configs/config_dnr_bandit_v2_mus64.yaml"
 checkpoint = "data:bandit_v2/checkpoint-multi_fixed.ckpt"
 stems = ["speech", "music", "sfx"]
 size_mb = 142
+speed = { cpu = { load = 7.0, rate = 7.1 } }
 cpu_only = true
 note = """Trabaja a 48 kHz, como el pipeline, asi que no hay remuestreo. \
 Tiene pesos por idioma: castellano, ingles y multilingue. \
@@ -101,6 +102,7 @@ checkpoint = "repo:pretrained/bs_roformer/model_bs_roformer_ep_317_sdr_12.9755.c
 checkpoint_url = "https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models/model_bs_roformer_ep_317_sdr_12.9755.ckpt"
 stems = ["vocals", "other"]
 size_mb = 610
+speed = { mps = { load = 4.4, rate = 4.44 } }
 note = """El mismo modelo que usa el pipeline con `--separator local`. \
 SDR vocals 10.87. Util como referencia: lo que salga aqui es lo que \
 saldria en un episodio."""

@@ -110,6 +110,12 @@ hace falta tocar el codigo: crea `msst_models.local.toml` junto al `.env` (o
 apunta `MSST_CATALOG` donde quieras) y sus entradas se fusionan encima,
 sobrescribiendo por `id`.
 
+Antes de lanzar, la interfaz dice **cuanto va a tardar**. La primera vez es
+una estimacion de fabrica; a partir de ahi se ajusta a lo que de verdad tarda tu
+maquina, porque cada ejecucion se apunta en
+`~/.config/remaster/msst_timings.json` y la recta se recalcula con tus medidas.
+El historial va por modelo, idioma y dispositivo.
+
 **Bandit corre en CPU a la fuerza**: la arquitectura usa `float64` y Metal no
 lo soporta, asi que con audio largo tarda. Para eso esta el boton de cancelar,
 que ademas mata el arbol de procesos entero y no solo el hijo directo.

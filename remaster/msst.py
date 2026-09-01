@@ -68,6 +68,9 @@ class MsstModel:
     # `model.to("mps")` revienta con "Cannot convert a MPS Tensor to float64".
     # Se marcan aqui para forzarles CPU sin que haya que descubrirlo fallando.
     cpu_only: bool = False
+    # Cuanto cuesta el modelo, por dispositivo: (device, carga_s, ritmo).
+    # Es el punto de partida hasta que haya medidas de tu propia maquina.
+    speed: tuple[tuple[str, float, float], ...] = ()
     variants: tuple[MsstVariant, ...] = ()
 
     def variant(self, variant_id: Optional[str]) -> Optional[MsstVariant]:
@@ -117,6 +120,10 @@ def _model_from(raw: dict) -> MsstModel:
         needs_fix=bool(raw.get("needs_fix", False)),
         size_mb=int(raw.get("size_mb", 0)),
         cpu_only=bool(raw.get("cpu_only", False)),
+        speed=tuple(
+            (device, float(v.get("load", 0.0)), float(v.get("rate", 0.0)))
+            for device, v in (raw.get("speed") or {}).items()
+        ),
         variants=tuple(_variant_from(v) for v in raw.get("variant", ())),
     )
 

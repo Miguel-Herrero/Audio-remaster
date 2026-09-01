@@ -135,6 +135,9 @@ label { font-size: .9rem; }
 .lang[aria-checked="true"] { color: var(--accent); border-color: var(--accent); }
 .lang.off { opacity: .5; }
 .lab-opts { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; }
+.lab-eta { font-size: .82rem; color: var(--fg-dim); margin-top: -.6rem; }
+.lab-eta b { color: var(--fg); font-weight: 550; }
+.lab-eta span { color: var(--fg-faint); }
 .lab-preview {
   font-family: var(--mono); font-size: .78rem; color: var(--fg-dim);
   background: var(--bg-sunken); border: 1px solid var(--line-soft);
@@ -357,6 +360,7 @@ table.mini th { color: var(--fg-faint); font-weight: 500; }
     </div>
 
     <div class="lab-preview" id="sep-preview">elige un archivo y un modelo</div>
+    <div class="lab-eta" id="sep-eta"></div>
 
     <div class="runbar">
       <button class="primary" id="sep-btn">Separar</button>
@@ -1026,6 +1030,7 @@ function renderModels() {
       }
       renderModels();
       paintPreview();
+      refreshEta();
     });
     box.appendChild(el);
   }
@@ -1048,8 +1053,36 @@ function paintPreview() {
 }
 
 ['sep-input', 'sep-out', 'sep-format'].forEach(id =>
-  $(id).addEventListener('input', paintPreview));
+  $(id).addEventListener('input', () => { paintPreview(); scheduleEta(); }));
 $('sep-format').addEventListener('change', paintPreview);
+$('sep-cpu').addEventListener('change', scheduleEta);
+
+let etaTimer = null;
+function scheduleEta() {
+  // El campo se escribe letra a letra y cada consulta lanza un ffprobe:
+  // se espera a que pare de teclear.
+  clearTimeout(etaTimer);
+  etaTimer = setTimeout(refreshEta, 400);
+}
+
+async function refreshEta() {
+  const audio = ($('sep-input').value || '').trim();
+  const box = $('sep-eta');
+  if (!audio || !sepModel) { box.innerHTML = ''; return; }
+  const params = new URLSearchParams({
+    path: audio, model: sepModel, lang: sepLang || '',
+    cpu: $('sep-cpu').checked ? 'true' : 'false',
+  });
+  try {
+    const data = await api('/api/msst/eta?' + params);
+    box.innerHTML = `tardara <b>${escapeHtml(data.eta)}</b> ` +
+      `<span>· ${fmtSeconds(data.audio_seconds)} de audio en ${data.device} ` +
+      `· ${escapeHtml(data.source)}</span>`;
+  } catch (e) {
+    // Que no se pueda estimar no impide separar: se calla y ya.
+    box.innerHTML = '';
+  }
+}
 
 wireDrop($('sep-input'), (path) => {
   $('sep-input').value = path;
