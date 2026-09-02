@@ -1,0 +1,217 @@
+# Catalogo de modelos para la pestana "Separar".
+#
+# Cada entrada empareja las tres cosas que `inference.py` de MSST necesita y
+# que van acopladas: `model_type`, `config` y `checkpoint`. Ojo: si el YAML
+# trae `training.model_type`, ese gana sobre el que se pase por linea de
+# comandos, asi que el config manda.
+#
+# Las rutas llevan prefijo:
+#   repo:  cuelga del clon de Music-Source-Separation-Training (solo lectura)
+#   data:  cuelga de MSST_DATA_DIR (~/.cache/remaster/msst por defecto), que
+#          es donde se escribe lo que descargamos. Nunca dentro del repo ajeno.
+#
+# Para anadir un modelo propio no hace falta tocar este fichero ni el codigo:
+# crea `msst_models.local.toml` junto al .env (o apunta MSST_CATALOG a el) y
+# sus entradas se fusionan encima de estas, sobrescribiendo por `id`.
+#
+# `sample_rate` es la frecuencia a la que trabaja el modelo. Casi todos se
+# entrenaron a 44100: remuestrean lo que les des y devuelven los stems a esa
+# frecuencia. Con material de 48000 eso supone un viaje 48 -> 44.1 -> 48, que
+# en audio de cine y TV no quita nada audible (por encima de 20 kHz no suele
+# haber senal), pero conviene saberlo antes de elegir. Bandit v2 es el unico
+# del catalogo que trabaja nativamente a 48000.
+#
+# SDR = Signal-to-Distortion Ratio; mas alto es mejor. Las cifras salen de
+# docs/pretrained_models.md del repo de MSST y no son comparables entre
+# tareas distintas (separar voz no se mide igual que quitar ruido).
+
+# --------------------------------------------------------------------------
+# Cine y TV: dialogo / musica / efectos
+# --------------------------------------------------------------------------
+
+[[model]]
+id = "bandit_v2"
+name = "Bandit v2 — dialogo / musica / efectos"
+model_type = "bandit_v2"
+config = "repo:configs/config_dnr_bandit_v2_mus64.yaml"
+checkpoint = "data:bandit_v2/checkpoint-multi_fixed.ckpt"
+stems = ["speech", "music", "sfx"]
+size_mb = 142
+sample_rate = 48000
+speed = { cpu = { load = 7.0, rate = 7.1 } }
+cpu_only = true
+note = """Trabaja a 48 kHz, como el pipeline, asi que no hay remuestreo. \
+Tiene pesos por idioma: castellano, ingles y multilingue. \
+Corre en CPU a la fuerza (la arquitectura usa float64 y Metal no lo \
+soporta), asi que con audio largo tarda: para eso esta el boton de cancelar."""
+
+  [[model.variant]]
+  id = "multi"
+  label = "multilingue"
+  checkpoint = "data:bandit_v2/checkpoint-multi_fixed.ckpt"
+  size_mb = 142
+
+  [[model.variant]]
+  id = "spa"
+  label = "espanol"
+  checkpoint = "data:bandit_v2/checkpoint-spa_fixed.ckpt"
+  checkpoint_url = "https://zenodo.org/records/12701995/files/checkpoint-spa.ckpt?download=1"
+  needs_fix = true
+  size_mb = 142
+
+  [[model.variant]]
+  id = "eng"
+  label = "ingles"
+  checkpoint = "data:bandit_v2/checkpoint-eng_fixed.ckpt"
+  checkpoint_url = "https://zenodo.org/records/12701995/files/checkpoint-eng.ckpt?download=1"
+  needs_fix = true
+  size_mb = 142
+
+# Los otros cuatro idiomas del mismo registro de Zenodo. Se descargan igual
+# (446 MB cada uno, ~142 MB una vez convertidos): descomenta el bloque que
+# quieras y ejecuta `remaster msst-fetch bandit_v2 --lang fra`.
+#
+#   [[model.variant]]
+#   id = "fra"
+#   label = "frances"
+#   checkpoint = "data:bandit_v2/checkpoint-fra_fixed.ckpt"
+#   checkpoint_url = "https://zenodo.org/records/12701995/files/checkpoint-fra.ckpt?download=1"
+#   needs_fix = true
+#   size_mb = 142
+#
+#   ... y lo mismo con deu (aleman), cmn (mandarin) y fao (feroes),
+#   cambiando las tres apariciones del codigo de idioma.
+
+[[model]]
+id = "bandit_plus"
+name = "BandIt Plus — dialogo / musica / efectos"
+model_type = "bandit"
+config = "repo:configs/config_dnr_bandit_bsrnn_multi_mus64.yaml"
+checkpoint = "repo:pretrained/bandit_plus/model_bandit_plus_dnr_sdr_11.47.chpt"
+checkpoint_url = "https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/download/v.1.0.3/model_bandit_plus_dnr_sdr_11.47.chpt"
+stems = ["speech", "music", "effects"]
+size_mb = 142
+sample_rate = 44100
+cpu_only = true
+note = """Con metricas publicadas: DnR 11.50 de media — voz 15.64, \
+musica 9.18, efectos 9.69. Trabaja a 44.1 kHz, asi que hay remuestreo \
+desde los 48 kHz del pipeline, y se entreno solo con ingles. \
+Corre en CPU por el mismo motivo que v2."""
+
+# --------------------------------------------------------------------------
+# Voz frente a resto
+# --------------------------------------------------------------------------
+
+[[model]]
+id = "bs_roformer_viperx"
+name = "BS-Roformer (viperx) — voz / resto"
+model_type = "bs_roformer"
+config = "repo:configs/viperx/model_bs_roformer_ep_317_sdr_12.9755.yaml"
+checkpoint = "repo:pretrained/bs_roformer/model_bs_roformer_ep_317_sdr_12.9755.ckpt"
+checkpoint_url = "https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models/model_bs_roformer_ep_317_sdr_12.9755.ckpt"
+stems = ["vocals", "other"]
+size_mb = 610
+sample_rate = 44100
+speed = { mps = { load = 4.4, rate = 4.44 } }
+note = """El mismo modelo que usa el pipeline con `--separator local`. \
+SDR vocals 10.87. Util como referencia: lo que salga aqui es lo que \
+saldria en un episodio."""
+
+[[model]]
+id = "mel_band_roformer_kj"
+name = "MelBand Roformer (KimberleyJensen) — voz / resto"
+model_type = "mel_band_roformer"
+config = "repo:configs/KimberleyJensen/config_vocals_mel_band_roformer_kj.yaml"
+checkpoint = "data:mel_band_roformer_kj/MelBandRoformer.ckpt"
+checkpoint_url = "https://huggingface.co/KimberleyJSN/melbandroformer/resolve/main/MelBandRoformer.ckpt"
+stems = ["vocals", "other"]
+size_mb = 871
+sample_rate = 44100
+note = "El mejor de voz del catalogo por SDR (10.98), y el mas pesado de bajar."
+
+[[model]]
+id = "mel_band_roformer_viperx"
+name = "MelBand Roformer (viperx) — voz / resto"
+model_type = "mel_band_roformer"
+config = "repo:configs/viperx/model_mel_band_roformer_ep_3005_sdr_11.4360.yaml"
+checkpoint = "data:mel_band_roformer_viperx/model_mel_band_roformer_ep_3005_sdr_11.4360.ckpt"
+checkpoint_url = "https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models/model_mel_band_roformer_ep_3005_sdr_11.4360.ckpt"
+stems = ["vocals", "other"]
+size_mb = 961
+sample_rate = 44100
+note = "SDR vocals 9.67. Otra arquitectura con que contrastar el resultado."
+
+[[model]]
+id = "mdx23c_vocals"
+name = "MDX23C — voz / resto"
+model_type = "mdx23c"
+config = "data:mdx23c_vocals/config_vocals_mdx23c.yaml"
+config_url = "https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/download/v1.0.0/config_vocals_mdx23c.yaml"
+checkpoint = "data:mdx23c_vocals/model_vocals_mdx23c_sdr_10.17.ckpt"
+checkpoint_url = "https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/download/v1.0.0/model_vocals_mdx23c_sdr_10.17.ckpt"
+stems = ["vocals", "other"]
+size_mb = 427
+sample_rate = 44100
+note = "SDR vocals 10.17. Arquitectura convolucional, distinta a los roformer."
+
+# --------------------------------------------------------------------------
+# Restauracion: quitar cosas de una sola pista
+# --------------------------------------------------------------------------
+
+[[model]]
+id = "denoise_mel_band_roformer"
+name = "MelBand Roformer denoise — quitar ruido de fondo"
+model_type = "mel_band_roformer"
+config = "data:denoise_mel_band_roformer/model_mel_band_roformer_denoise.yaml"
+config_url = "https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/download/v.1.0.7/model_mel_band_roformer_denoise.yaml"
+checkpoint = "data:denoise_mel_band_roformer/denoise_mel_band_roformer_aufr33_sdr_27.9959.ckpt"
+checkpoint_url = "https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/download/v.1.0.7/denoise_mel_band_roformer_aufr33_sdr_27.9959.ckpt"
+stems = ["dry", "other"]
+size_mb = 871
+sample_rate = 44100
+note = """Separa la senal limpia del ruido (siseo, zumbido). \
+Pensado justo para material viejo. SDR 27.99, que no es comparable con \
+los de separacion de voz: mide otra cosa."""
+
+[[model]]
+id = "dereverb_mel_band_roformer"
+name = "MelBand Roformer dereverb — quitar reverberacion"
+model_type = "mel_band_roformer"
+config = "data:dereverb_mel_band_roformer/dereverb_mel_band_roformer_anvuew.yaml"
+config_url = "https://huggingface.co/anvuew/dereverb_mel_band_roformer/resolve/main/dereverb_mel_band_roformer_anvuew.yaml"
+checkpoint = "data:dereverb_mel_band_roformer/dereverb_mel_band_roformer_anvuew_sdr_19.1729.ckpt"
+checkpoint_url = "https://huggingface.co/anvuew/dereverb_mel_band_roformer/resolve/main/dereverb_mel_band_roformer_anvuew_sdr_19.1729.ckpt"
+stems = ["noreverb", "reverb"]
+size_mb = 871
+sample_rate = 44100
+note = "Quita la cola de reverberacion de una voz ya separada. SDR 19.17."
+
+[[model]]
+id = "mel_band_roformer_crowd"
+name = "MelBand Roformer crowd — separar publico y aplausos"
+model_type = "mel_band_roformer"
+config = "data:mel_band_roformer_crowd/model_mel_band_roformer_crowd.yaml"
+config_url = "https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/download/v.1.0.4/model_mel_band_roformer_crowd.yaml"
+checkpoint = "data:mel_band_roformer_crowd/mel_band_roformer_crowd_aufr33_viperx_sdr_8.7144.ckpt"
+checkpoint_url = "https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/download/v.1.0.4/mel_band_roformer_crowd_aufr33_viperx_sdr_8.7144.ckpt"
+stems = ["crowd", "other"]
+size_mb = 871
+sample_rate = 44100
+note = "Aisla risas enlatadas, aplausos y murmullo de fondo. SDR 8.71."
+
+# --------------------------------------------------------------------------
+# Musica por instrumentos
+# --------------------------------------------------------------------------
+
+[[model]]
+id = "htdemucs_6stems"
+name = "HTDemucs 4 (6 pistas) — bateria / bajo / voz / otros / piano / guitarra"
+model_type = "htdemucs"
+config = "repo:configs/config_htdemucs_6stems.yaml"
+checkpoint = "data:htdemucs_6stems/5c90dfd2-34c22ccb.th"
+checkpoint_url = "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/5c90dfd2-34c22ccb.th"
+stems = ["bass", "drums", "vocals", "other", "piano", "guitar"]
+size_mb = 52
+sample_rate = 44100
+note = """Seis pistas de un golpe y solo 52 MB. Util para desmenuzar la \
+musica de fondo una vez separada del dialogo."""

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -34,7 +35,15 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
-from ..cli import STEP_ORDER, stats_search_dirs, run_calibration
+from ..cli import (
+    DEFAULT_MSST_DATA_DIR,
+    MSST_TIMINGS_PATH,
+    STEP_ORDER,
+    run_calibration,
+    stats_search_dirs,
+)
+from ..msst import MsstError, MsstRepo, catalog_with_status, find_model, load_catalog
+from ..msst_timing import device_for, format_eta, speed_for
 from ..events import read_events
 from ..layout import EpisodeLayout
 from ..manifest import Manifest
@@ -63,12 +72,17 @@ class Job:
     id: str
     episode: str
     command: list[str]  # argv completo tras `-m remaster.cli`, p.ej. ["run", "<ep>", "--from", ...]
-    status: str = "running"  # running | done | error
+    status: str = "running"  # running | done | error | cancelled
     log: list[str] = field(default_factory=list)
     process: Optional[subprocess.Popen] = None
     events_path: Optional[Path] = None
     started_at: float = field(default_factory=time.time)
     finished_at: Optional[float] = None
+    kind: str = "pipeline"  # pipeline | msst | fetch
+    cancelled: bool = False
+    # La ultima linea vino de un "\r" (una barra de progreso reescribiendose)
+    # y la siguiente debe sustituirla en vez de acumularse.
+    overwrite_last: bool = False
 
 
 _jobs: dict[str, Job] = {}
@@ -77,6 +91,28 @@ _jobs_lock = threading.Lock()
 # Token en memoria del proceso. Se pasa al subproceso por entorno y nunca
 # por argv, que cualquiera puede leer con `ps`.
 _mvsep_token: Optional[str] = None
+
+
+def _msst_setting(name: str, default: str = "") -> str:
+    """Un ajuste de MSST: primero el entorno, luego el `.env`, luego el default."""
+    return os.environ.get(name) or read_env(_ENV_PATH).get(name) or default
+
+
+def _msst_repo() -> MsstRepo:
+    return MsstRepo(
+        root=Path(_msst_setting("MSST_REPO_DIR", "~/no-configurado")).expanduser(),
+        data_dir=Path(_msst_setting("MSST_DATA_DIR", str(DEFAULT_MSST_DATA_DIR))).expanduser(),
+    )
+
+
+def _msst_catalog():
+    extra = _msst_setting("MSST_CATALOG")
+    path = Path(extra).expanduser() if extra else _ENV_PATH.parent / "msst_models.local.toml"
+    return load_catalog(extra=path)
+
+
+def _msst_output_dir() -> Path:
+    return Path(_msst_setting("MSST_OUTPUT_DIR", str(Path.home() / "Movies" / "_separaciones"))).expanduser()
 
 
 # --------------------------------------------------------------------------
@@ -145,21 +181,29 @@ def api_root_get() -> JSONResponse:
     return JSONResponse(_root_payload())
 
 
+def _clean_path(raw: str) -> str:
+    """Lo que suelta un arrastre del Finder, convertido en ruta.
+
+    El navegador entrega un `file://` URL con los espacios escapados. Se
+    limpia aqui, en un solo sitio, porque lo arrastran tanto la carpeta base
+    como el fichero a separar.
+    """
+    raw = (raw or "").strip()
+    if raw.startswith("file://"):
+        from urllib.parse import unquote, urlparse
+        raw = unquote(urlparse(raw).path)
+    return raw
+
+
 @app.post("/api/root")
 def api_root_set(payload: dict) -> JSONResponse:
     """Cambia la carpeta base. Valida antes de aceptar: decir 'ninguna
     carpeta' con un mensaje util es mejor que una lista vacia sin motivo.
     """
     global _root
-    raw = (payload.get("path") or "").strip()
+    raw = _clean_path(payload.get("path") or "")
     if not raw:
         raise HTTPException(400, "falta 'path'")
-    # Arrastrar del Finder deja un file:// URL; el navegador ya lo
-    # decodifica, pero el esquema hay que quitarlo aqui igualmente por si
-    # llega crudo desde otro cliente.
-    if raw.startswith("file://"):
-        from urllib.parse import unquote, urlparse
-        raw = unquote(urlparse(raw).path)
     path = Path(raw).expanduser()
     if not path.exists():
         raise HTTPException(400, f"no existe: {path}")
@@ -349,6 +393,44 @@ def api_align_png(code: str) -> FileResponse:
 # Ejecucion
 # --------------------------------------------------------------------------
 
+def _pump_output(proc: subprocess.Popen, job: Job) -> None:
+    """Vuelca la salida del subproceso al log, en vivo.
+
+    No se puede iterar por lineas: `tqdm` (y `ffmpeg`) pintan el progreso con
+    "\r" y sin salto de linea, asi que un `for line in stdout` se quedaria
+    bloqueado hasta el final de la fase y la barra pareceria congelada. Se lee
+    con `read1`, que devuelve lo que haya sin esperar a llenar el bufer, y se
+    trata "\r" como reescritura de la ultima linea, igual que un terminal.
+    """
+    assert proc.stdout is not None
+    pending = ""
+    while True:
+        chunk = proc.stdout.read1(4096)
+        if not chunk:
+            break
+        pending += chunk.decode("utf-8", errors="replace")
+        while True:
+            cut = min(
+                (i for i in (pending.find("\n"), pending.find("\r")) if i >= 0),
+                default=-1,
+            )
+            if cut < 0:
+                break
+            text, sep, pending = pending[:cut], pending[cut], pending[cut + 1:]
+            _append_line(job, text, overwrite=sep == "\r")
+    if pending:
+        _append_line(job, pending, overwrite=True)
+
+
+def _append_line(job: Job, text: str, overwrite: bool) -> None:
+    with _jobs_lock:
+        if job.overwrite_last and job.log:
+            job.log[-1] = text
+        else:
+            job.log.append(text)
+        job.overwrite_last = overwrite
+
+
 def _run_job(job: Job) -> None:
     env = dict(os.environ)
     token, _ = _token_source()
@@ -366,20 +448,26 @@ def _run_job(job: Job) -> None:
 
     proc = subprocess.Popen(
         [sys.executable, "-m", "remaster.cli", *job.command],
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, env=env,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env,
+        # Sesion propia para poder matar al grupo entero: lo que de verdad
+        # consume la maquina (ffmpeg, REAPER, inference.py) es un nieto, y
+        # matar solo a la CLI lo dejaria vivo.
+        start_new_session=True,
     )
     job.process = proc
-    assert proc.stdout is not None
-    for line in proc.stdout:
-        with _jobs_lock:
-            job.log.append(line.rstrip("\n"))
+    _pump_output(proc, job)
     proc.wait()
     with _jobs_lock:
-        job.status = "done" if proc.returncode == 0 else "error"
+        if job.cancelled:
+            job.status = "cancelled"
+        else:
+            job.status = "done" if proc.returncode == 0 else "error"
         job.finished_at = time.time()
 
 
-def _start_job(episode: str, command: list[str], with_events: bool = False) -> JSONResponse:
+def _start_job(
+    episode: str, command: list[str], with_events: bool = False, kind: str = "pipeline"
+) -> JSONResponse:
     job_id = uuid.uuid4().hex[:12]
     events_path = None
     if with_events:
@@ -387,7 +475,7 @@ def _start_job(episode: str, command: list[str], with_events: bool = False) -> J
         os.close(fd)
         events_path = Path(name)
         command = [*command, "--events", str(events_path)]
-    job = Job(id=job_id, episode=episode, command=command, events_path=events_path)
+    job = Job(id=job_id, episode=episode, command=command, events_path=events_path, kind=kind)
     with _jobs_lock:
         _jobs[job_id] = job
     threading.Thread(target=_run_job, args=(job,), daemon=True).start()
@@ -421,6 +509,7 @@ def api_job(job_id: str) -> JSONResponse:
             raise HTTPException(404, "job no encontrado")
         payload = {
             "status": job.status,
+            "kind": job.kind,
             "log": "\n".join(job.log),
             "events": read_events(job.events_path) if job.events_path else [],
             "seconds": round((job.finished_at or time.time()) - job.started_at, 1),
@@ -463,6 +552,173 @@ def api_calibrate(payload: dict) -> JSONResponse:
         "applied": bool(payload.get("apply", False)),
         "step_ran": step_ran,
     })
+
+
+@app.post("/api/jobs/{job_id}/cancel")
+def api_job_cancel(job_id: str) -> JSONResponse:
+    """Para un job en marcha.
+
+    Se manda la senal al *grupo* de procesos, no al hijo: `inference.py` y
+    `ffmpeg` son nietos, y un terminate a la CLI los dejaria corriendo. Si a
+    los cinco segundos siguen vivos, se pasa a SIGKILL.
+    """
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+        if not job:
+            raise HTTPException(404, "job no encontrado")
+        if job.status != "running" or job.process is None:
+            return JSONResponse({"status": job.status})
+        job.cancelled = True
+        proc = job.process
+
+    def _stop() -> None:
+        try:
+            group = os.getpgid(proc.pid)
+        except ProcessLookupError:
+            return
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            try:
+                os.killpg(group, sig)
+            except ProcessLookupError:
+                return
+            try:
+                proc.wait(timeout=5)
+                return
+            except subprocess.TimeoutExpired:
+                continue
+
+    threading.Thread(target=_stop, daemon=True).start()
+    return JSONResponse({"status": "cancelling"})
+
+
+# --------------------------------------------------------------------------
+# Laboratorio de separacion (MSST)
+# --------------------------------------------------------------------------
+
+@app.get("/api/msst")
+def api_msst() -> JSONResponse:
+    repo = _msst_repo()
+    configured = bool(_msst_setting("MSST_REPO_DIR"))
+    return JSONResponse({
+        "repo_path": str(repo.root) if configured else "",
+        "data_dir": str(repo.data_dir),
+        "output_dir": str(_msst_output_dir()),
+        "problems": ["falta la carpeta del repo"] if not configured else repo.problems(),
+        "env_path": str(_ENV_PATH),
+    })
+
+
+@app.post("/api/msst")
+def api_msst_set(payload: dict) -> JSONResponse:
+    """Fija las rutas y las deja escritas en el `.env`, para el proximo arranque."""
+    for key, raw in (
+        ("MSST_REPO_DIR", payload.get("repo_path")),
+        ("MSST_OUTPUT_DIR", payload.get("output_dir")),
+    ):
+        if raw is None:
+            continue
+        value = _clean_path(str(raw))
+        if key == "MSST_REPO_DIR" and value and not Path(value).is_dir():
+            raise HTTPException(400, f"no existe la carpeta: {value}")
+        os.environ[key] = value
+        try:
+            set_env_value(_ENV_PATH, key, value)
+        except OSError:
+            # Que no se pueda escribir el .env no debe impedir separar ahora.
+            pass
+    return api_msst()
+
+
+@app.get("/api/msst/models")
+def api_msst_models() -> JSONResponse:
+    return JSONResponse(catalog_with_status(_msst_catalog(), _msst_repo()))
+
+
+@app.post("/api/msst/models/{model_id}/download")
+def api_msst_download(model_id: str, payload: dict | None = None) -> JSONResponse:
+    lang = (payload or {}).get("lang")
+    try:
+        model = find_model(_msst_catalog(), model_id)
+        model.variant(lang)
+    except MsstError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    command = ["msst-fetch", model_id]
+    if lang:
+        command += ["--lang", lang]
+    return _start_job(model_id, command, kind="fetch")
+
+
+@app.get("/api/msst/eta")
+def api_msst_eta(path: str, model: str, lang: str = "", cpu: bool = False) -> JSONResponse:
+    """Cuanto va a tardar, antes de lanzarlo.
+
+    Se calcula aqui y no en el navegador porque hace falta la duracion real
+    del audio (ffprobe) y el historial de esta maquina.
+    """
+    audio = Path(_clean_path(path))
+    if not audio.is_file():
+        raise HTTPException(400, "no existe el fichero")
+    try:
+        found = find_model(_msst_catalog(), model)
+        variant = found.variant(lang or None)
+    except MsstError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    from ..probe import probe_file
+    try:
+        seconds = probe_file(audio).duration
+    except Exception:
+        raise HTTPException(400, "no he podido leer la duracion del audio")
+
+    device = device_for(found, force_cpu=cpu)
+    speed, origin = speed_for(found, variant.id if variant else None, device,
+                              MSST_TIMINGS_PATH)
+    return JSONResponse({
+        "audio_seconds": round(seconds, 1),
+        "eta_seconds": round(speed.estimate(seconds)),
+        "eta": format_eta(speed.estimate(seconds)),
+        "device": device,
+        "source": origin,
+    })
+
+
+@app.post("/api/msst/run")
+def api_msst_run(payload: dict) -> JSONResponse:
+    audio = _clean_path(str(payload.get("input") or ""))
+    if not audio:
+        raise HTTPException(400, "falta el fichero de entrada")
+    if not Path(audio).is_file():
+        raise HTTPException(400, f"no existe el fichero: {audio}")
+
+    model_id = payload.get("model")
+    if not model_id:
+        raise HTTPException(400, "falta el modelo")
+    try:
+        model = find_model(_msst_catalog(), model_id)
+        variant = model.variant(payload.get("lang"))
+    except MsstError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    status = _msst_repo().status(model, variant)
+    if not status["checkpoint_ok"]:
+        raise HTTPException(400, "faltan los pesos de ese modelo: descargalos primero")
+
+    out_dir = _clean_path(str(payload.get("output_dir") or "")) or str(_msst_output_dir())
+    command = [
+        "msst", audio,
+        "--model", model_id,
+        "--out", out_dir,
+        "--format", payload.get("format", "flac24"),
+    ]
+    if variant:
+        command += ["--lang", variant.id]
+    if payload.get("extract_instrumental"):
+        command.append("--extract-instrumental")
+    if payload.get("tta"):
+        command.append("--tta")
+    if payload.get("cpu"):
+        command.append("--cpu")
+    return _start_job(Path(audio).name, command, with_events=True, kind="msst")
 
 
 @app.get("/", response_class=HTMLResponse)
