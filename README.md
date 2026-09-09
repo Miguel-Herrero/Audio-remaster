@@ -67,6 +67,65 @@ remaster run ~/Movies/s03e01 --from render        # renderiza y mezcla desde ahi
 
 Por defecto, `--separator local` usa un modelo BS-Roformer en la propia maquina (offline, sin token). `--separator mvsep` usa el servicio hospedado como alternativa/comparacion — necesita `MVSEP_API_TOKEN` en el entorno (nunca por linea de comandos, para no dejarlo en el historial de shell).
 
+## Laboratorio de separacion
+
+La UI tiene una segunda pestana, **Separar**, para probar modelos sobre un
+audio suelto sin pasar por el pipeline. Es donde se compara antes de decidir:
+el paso `separate` siempre usa el modelo del perfil, asi que no habia forma de
+escuchar que hace otro.
+
+Se apoya en [Music-Source-Separation-Training](https://github.com/ZFTurbo/Music-Source-Separation-Training)
+(MSST), que hay que clonar aparte y **no se modifica**: se leen sus configs y
+se ejecuta su `inference.py` con el interprete de su propio `venv`. Puede
+quedarse en `main` y actualizarse con `git pull` sin romper nada de aqui.
+
+```bash
+git clone https://github.com/ZFTurbo/Music-Source-Separation-Training
+cd Music-Source-Separation-Training
+python3 -m venv venv && venv/bin/pip install -r requirements.txt
+```
+
+Y en el `.env` de este repo (o desde la propia UI):
+
+```
+MSST_REPO_DIR=/ruta/a/Music-Source-Separation-Training
+MSST_OUTPUT_DIR=~/Movies/_separaciones
+```
+
+Lo interesante para material de cine y TV es **Bandit**, que en vez de
+voz/resto separa **dialogo / musica / efectos**, y que en Bandit v2 tiene pesos
+entrenados por idioma (castellano, ingles, multilingue). El catalogo trae
+ademas modelos de restauracion: quitar ruido de fondo, quitar reverberacion y
+aislar publico.
+
+Tambien desde la terminal:
+
+```bash
+remaster msst escena.flac --model bandit_v2 --lang spa
+remaster msst-fetch mel_band_roformer_kj        # descarga los pesos que falten
+```
+
+Los modelos salen de `remaster/msst_models.toml`. Para anadir uno propio no
+hace falta tocar el codigo: crea `msst_models.local.toml` junto al `.env` (o
+apunta `MSST_CATALOG` donde quieras) y sus entradas se fusionan encima,
+sobrescribiendo por `id`.
+
+Antes de lanzar, la interfaz dice **cuanto va a tardar**. La primera vez es
+una estimacion de fabrica; a partir de ahi se ajusta a lo que de verdad tarda tu
+maquina, porque cada ejecucion se apunta en
+`~/.config/remaster/msst_timings.json` y la recta se recalcula con tus medidas.
+El historial va por modelo, idioma y dispositivo.
+
+Cada modelo indica **a que frecuencia trabaja**. Casi todos se entrenaron a
+44,1 kHz y devuelven los stems a esa frecuencia, remuestreando lo que les des
+(MVSEP hace lo mismo). Con material de cine y TV no hay nada audible en juego:
+por encima de 20 kHz una fuente de DVD ya no tiene senal. Bandit v2 es el unico
+del catalogo que trabaja nativamente a 48 kHz.
+
+**Bandit corre en CPU a la fuerza**: la arquitectura usa `float64` y Metal no
+lo soporta, asi que con audio largo tarda. Para eso esta el boton de cancelar,
+que ademas mata el arbol de procesos entero y no solo el hijo directo.
+
 ## Desarrollo
 
 ```bash

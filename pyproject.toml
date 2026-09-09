@@ -1,6 +1,6 @@
 [project]
 name = "remaster"
-version = "2.2.0"
+version = "2.3.0"
 description = "Pipeline determinista de reconstruccion de audio para Sherlock Holmes (1984)"
 requires-python = ">=3.12,<3.14"
 dependencies = [
